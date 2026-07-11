@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { generateLiveKitToken, generateJoinToken, getLiveKitUrl } from '@/lib/livekit';
-import { getSession } from '@/lib/session';
+import { getSession, getSessionOrBypass } from '@/lib/session';
 import { getInvite, updateInvite } from '@/lib/redis';
 import {
   sanitizeString,
@@ -23,14 +23,8 @@ import {
 
 export async function POST(request: NextRequest) {
   try {
-    // Must be authenticated
-    const session = await getSession();
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
+    // Use bypass session if auth is disabled
+    const session = await getSessionOrBypass();
 
     const body = await request.json().catch(() => null);
     if (!body) {
