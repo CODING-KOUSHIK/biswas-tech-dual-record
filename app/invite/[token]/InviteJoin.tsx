@@ -1,7 +1,8 @@
 'use client';
 
-// app/invite/[token]/InviteJoin.tsx — Guest joins room via invite token
-// Fetches LiveKit token + URL from the API, then renders RoomClient.
+// app/invite/[token]/InviteJoin.tsx
+// Guest joins room using a self-contained invite token.
+// No Redis. Token contains roomId + partnerGender, verified on server.
 
 import { useEffect, useState } from 'react';
 import { useDeviceId } from '@/hooks/useDeviceId';
@@ -26,16 +27,17 @@ export function InviteJoin({ token, roomId, partnerGender }: InviteJoinProps) {
 
     const fetchToken = async () => {
       try {
-        const params = new URLSearchParams({ roomId, inviteToken: token, deviceId });
+        const params = new URLSearchParams({
+          roomId,
+          inviteToken: token,
+          deviceId,
+        });
         const res = await fetch(`/api/livekit/token?${params.toString()}`);
         const data = await res.json();
 
         if (data.success) {
           setLivekitToken(data.data.token);
-          // Server returns the LiveKit URL — no NEXT_PUBLIC env var required
           setLivekitUrl(data.data.url);
-          // Hint cookie for server-side device binding check on next load
-          document.cookie = `btd_invite_${token}=${deviceId}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
         } else {
           setError(data.error ?? 'Failed to join session');
         }
@@ -52,7 +54,8 @@ export function InviteJoin({ token, roomId, partnerGender }: InviteJoinProps) {
       <div className="text-center max-w-sm mx-auto">
         <div className="text-4xl mb-4">⚠️</div>
         <h1 className="text-xl font-bold text-white mb-2">Unable to Join</h1>
-        <p className="text-gray-400 text-sm">{error}</p>
+        <p className="text-gray-400 text-sm mb-4">{error}</p>
+        <p className="text-gray-600 text-xs">Ask the host to send you a new invite link.</p>
       </div>
     );
   }

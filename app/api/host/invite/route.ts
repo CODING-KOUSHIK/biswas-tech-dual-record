@@ -1,11 +1,11 @@
-// app/api/host/invite/route.ts — Generate invite URLs (host only)
+// app/api/host/invite/route.ts — Generate self-contained invite URLs (no Redis needed)
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionOrBypass } from '@/lib/session';
-import { createInvite } from '@/lib/redis';
-import { generateInviteToken, generatePairId } from '@/lib/livekit';
+import { createInviteToken } from '@/lib/invite-token';
+import { generatePairId } from '@/lib/livekit';
 import { sanitizeString, isValidGender } from '@/lib/validation';
-import type { InviteRecord, Gender } from '@/types';
+import type { Gender } from '@/types';
 
 // POST /api/host/invite
 export async function POST(request: NextRequest) {
@@ -26,22 +26,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const token = generateInviteToken();
     const pairId = generatePairId();
     const roomId = `btd_${session.userId}_${pairId}`;
 
-    const invite: InviteRecord = {
-      token,
-      partnerGender: partnerGender as Gender,
-      status: 'pending',
-      deviceId: null,
-      createdAt: new Date().toISOString(),
+    // Self-contained token — no Redis needed
+    const token = await createInviteToken({
       roomId,
-    };
+      partnerGender: partnerGender as Gender,
+      hostId: session.userId,
+    });
 
-    await createInvite(invite);
-
-    // Build the invite URL from the request host (works on any domain/Vercel preview)
+    // Build invite URL from request host (works on localhost + Vercel)
     const host = request.headers.get('host') ?? 'localhost:3000';
     const protocol = host.includes('localhost') ? 'http' : 'https';
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? `${protocol}://${host}`;
@@ -54,7 +49,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Create invite error:', error);
     return NextResponse.json(
-      { success: false, error: 'Internal server error' },
+      { success: false, error: 'Failed to generate invite link. Check server logs.' },
       { status: 500 }
     );
   }

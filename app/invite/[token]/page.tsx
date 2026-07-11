@@ -1,7 +1,5 @@
 import type { Metadata } from 'next';
-import { redirect } from 'next/navigation';
-import { getInvite } from '@/lib/redis';
-import { cookies } from 'next/headers';
+import { verifyInviteToken } from '@/lib/invite-token';
 import { InviteJoin } from './InviteJoin';
 
 export const metadata: Metadata = {
@@ -15,33 +13,31 @@ interface Props {
 export default async function InvitePage({ params }: Props) {
   const { token } = await params;
 
-  if (!token || !/^[a-zA-Z0-9]{8}$/.test(token)) {
-    redirect('/login');
-  }
-
-  const invite = await getInvite(token);
-  if (!invite) {
+  if (!token || token.length < 10) {
     return (
       <div className="min-h-screen bg-[#0A0F1E] flex items-center justify-center p-4">
         <div className="text-center">
+          <div className="text-4xl mb-4">🔗</div>
           <h1 className="text-xl font-bold text-white mb-2">Invalid Invite</h1>
-          <p className="text-gray-400 text-sm">This invite link has expired or is invalid.</p>
+          <p className="text-gray-400 text-sm">This invite link is missing or malformed.</p>
         </div>
       </div>
     );
   }
 
-  // Check device cookie binding
-  const cookieStore = await cookies();
-  const boundDevice = cookieStore.get(`btd_invite_${token}`)?.value;
-  const deviceMismatch = boundDevice !== undefined && invite.deviceId !== null && boundDevice !== invite.deviceId;
+  // Verify the self-contained signed token — no Redis lookup needed
+  const invite = await verifyInviteToken(token);
 
-  if (deviceMismatch) {
+  if (!invite) {
     return (
       <div className="min-h-screen bg-[#0A0F1E] flex items-center justify-center p-4">
         <div className="text-center">
-          <h1 className="text-xl font-bold text-white mb-2">Access Denied</h1>
-          <p className="text-gray-400 text-sm">This invite link is bound to a different device.</p>
+          <div className="text-4xl mb-4">⏰</div>
+          <h1 className="text-xl font-bold text-white mb-2">Invite Expired or Invalid</h1>
+          <p className="text-gray-400 text-sm">
+            This invite link has expired (7 days) or is invalid.<br />
+            Ask the host to generate a new invite link.
+          </p>
         </div>
       </div>
     );
