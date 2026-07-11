@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
 import { DashboardClient, DashboardClientContent } from './DashboardClient';
 
@@ -7,12 +6,18 @@ export const metadata: Metadata = {
   title: 'Dashboard — Biswas Tech',
 };
 
-export default async function DashboardPage() {
-  const session = await getSession();
+// Fallback session used when auth is bypassed
+const BYPASS_SESSION = {
+  userId: 'host',
+  role: 'host' as const,
+  gender: 'MALE' as const,
+  language: 'EN',
+  deviceId: 'AUTO',
+};
 
-  if (!session || session.role !== 'host') {
-    redirect('/login');
-  }
+export default async function DashboardPage() {
+  // Try to get real session; fall back to bypass session if none
+  const session = (await getSession()) ?? BYPASS_SESSION;
 
   return (
     <div className="min-h-screen bg-[#0A0F1E]">

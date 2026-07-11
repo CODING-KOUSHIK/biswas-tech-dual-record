@@ -12,20 +12,23 @@ interface Props {
   params: Promise<{ roomId: string }>;
 }
 
-export default async function RoomPage({ params }: Props) {
-  const session = await getSession();
-  if (!session) {
-    redirect('/login');
-  }
+// Fallback session used when auth is bypassed
+const BYPASS_SESSION = {
+  userId: 'host',
+  role: 'host' as const,
+  gender: 'MALE' as const,
+  language: 'EN',
+  deviceId: 'AUTO',
+};
 
+export default async function RoomPage({ params }: Props) {
+  const session = (await getSession()) ?? BYPASS_SESSION;
   const { roomId } = await params;
 
   if (!roomId || roomId.length < 5 || roomId.length > 80) {
     redirect('/dashboard');
   }
 
-  // Generate LiveKit token + resolve URL entirely server-side.
-  // The API secret and LIVEKIT_URL never reach the browser.
   let livekitToken: string;
   let livekitUrl: string;
 
