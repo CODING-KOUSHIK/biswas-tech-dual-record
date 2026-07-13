@@ -64,6 +64,8 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const partnerDeviceIdRef = useRef<string>('unknown');
   const isLocalStreamFallbackRef = useRef<boolean>(false);
   const playCtxRef = useRef<AudioContext | null>(null);
+  const localMicTrackRef = useRef<MediaStreamTrack | null>(null);
+  const remoteTrackRef = useRef<MediaStreamTrack | null>(null);
 
   const [connState, setConnState] = useState<ConnState>('connecting');
   const [errorMsg, setErrorMsg] = useState('');
@@ -116,13 +118,15 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
     try {
       // 1. Get mic track from LiveKit to avoid opening the mic twice (prevents clicks/"bod bod" sound)
-      let localMicTrack: MediaStreamTrack | null = null;
+      let localMicTrack: MediaStreamTrack | null = localMicTrackRef.current;
       let isFallback = false;
 
-      for (const pub of room.localParticipant.trackPublications.values()) {
-        if (pub.kind === Track.Kind.Audio && pub.track && pub.track.mediaStreamTrack) {
-          localMicTrack = pub.track.mediaStreamTrack;
-          break;
+      if (!localMicTrack) {
+        for (const pub of room.localParticipant.trackPublications.values()) {
+          if (pub.kind === Track.Kind.Audio && pub.track && pub.track.mediaStreamTrack) {
+            localMicTrack = pub.track.mediaStreamTrack;
+            break;
+          }
         }
       }
 
@@ -157,20 +161,31 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       localSrc.connect(localProc);
       localProc.connect(silence);
 
-      // Remote partner audio from LiveKit
+      // Remote partner audio from LiveKit (using cached remoteTrackRef or fallback publications scan)
       let remoteProc: ScriptProcessorNode | undefined;
-      const remotes = Array.from(room.remoteParticipants.values());
-      if (remotes.length > 0) {
-        for (const pub of remotes[0].trackPublications.values()) {
-          if (pub.kind === Track.Kind.Audio && pub.track) {
-            const remoteSrc = ctx.createMediaStreamSource(new MediaStream([pub.track.mediaStreamTrack]));
-            remoteProc = ctx.createScriptProcessor(bufSize, 1, 1);
-            remoteProc.onaudioprocess = (e) => remoteChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-            remoteSrc.connect(remoteProc);
-            remoteProc.connect(silence);
-            break;
+      let remoteMicTrack = remoteTrackRef.current;
+
+      if (!remoteMicTrack) {
+        const remotes = Array.from(room.remoteParticipants.values());
+        if (remotes.length > 0) {
+          for (const pub of remotes[0].trackPublications.values()) {
+            if (pub.kind === Track.Kind.Audio && pub.track && pub.track.mediaStreamTrack) {
+              remoteMicTrack = pub.track.mediaStreamTrack;
+              break;
+            }
           }
         }
+      }
+
+      if (remoteMicTrack) {
+        const remoteSrc = ctx.createMediaStreamSource(new MediaStream([remoteMicTrack]));
+        remoteProc = ctx.createScriptProcessor(bufSize, 1, 1);
+        remoteProc.onaudioprocess = (e) => remoteChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+        remoteSrc.connect(remoteProc);
+        remoteProc.connect(silence);
+        console.log('[Room] Web Audio connected to remote partner audio track');
+      } else {
+        console.warn('[Room] Remote partner audio track was not found or subscribed yet');
       }
 
       captureRef.current = { ctx, localChunks, remoteChunks, localProc, remoteProc, startTime: Date.now() };
@@ -420,14 +435,16 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
         // PLAY incoming remote audio tracks in browser speakers
         if (track.kind === Track.Kind.Audio) {
+          remoteTrackRef.current = track.mediaStreamTrack;
           const element = track.attach();
           document.body.appendChild(element);
-          console.log('[Room] Playing remote audio track');
+          console.log('[Room] Playing and caching remote audio track');
         }
       })
       .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
         if (track.kind === Track.Kind.Audio) {
           track.detach().forEach((el: HTMLElement) => el.remove());
+          remoteTrackRef.current = null;
         }
       })
       .on(RoomEvent.DataReceived, (payload: Uint8Array) => {
@@ -461,7 +478,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       .then(async () => {
         // Automatically publish microphone audio track
         try {
-          await room.localParticipant.setMicrophoneEnabled(true);
+          const pub = await room.localParticipant.setMicrophoneEnabled(true);
+          if (pub && pub.track && pub.track.mediaStreamTrack) {
+            localMicTrackRef.current = pub.track.mediaStreamTrack;
+            console.log('[Room] Cached local microphone track publication');
+          }
           console.log('[Room] Local microphone published');
         } catch (micErr) {
           console.error('[Room] Failed to publish microphone:', micErr);
