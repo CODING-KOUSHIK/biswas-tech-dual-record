@@ -17,7 +17,7 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, mergeChunks, downsampleBuffer } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord, markRecordingAsUploaded, saveGuestBackupUrl } from '@/lib/db';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord, markRecordingAsUploaded } from '@/lib/db';
 import { downloadRecordingPair, getIndividualFilenames, getRecordingZipBlob } from '@/lib/zip';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import JSZip from 'jszip';
@@ -64,8 +64,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const partnerDeviceIdRef = useRef<string>('unknown');
   const isLocalStreamFallbackRef = useRef<boolean>(false);
   const playCtxRef = useRef<AudioContext | null>(null);
-  const localMicTrackRef = useRef<MediaStreamTrack | null>(null);
-  const remoteTrackRef = useRef<MediaStreamTrack | null>(null);
 
   const [connState, setConnState] = useState<ConnState>('connecting');
   const [errorMsg, setErrorMsg] = useState('');
@@ -87,11 +85,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
-
-  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
-  const localAudioPlayRef = useRef<HTMLAudioElement | null>(null);
-
-  const [sharingTelegramId, setSharingTelegramId] = useState<string | null>(null);
 
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -118,15 +111,13 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
     try {
       // 1. Get mic track from LiveKit to avoid opening the mic twice (prevents clicks/"bod bod" sound)
-      let localMicTrack: MediaStreamTrack | null = localMicTrackRef.current;
+      let localMicTrack: MediaStreamTrack | null = null;
       let isFallback = false;
 
-      if (!localMicTrack) {
-        for (const pub of room.localParticipant.trackPublications.values()) {
-          if (pub.kind === Track.Kind.Audio && pub.track && pub.track.mediaStreamTrack) {
-            localMicTrack = pub.track.mediaStreamTrack;
-            break;
-          }
+      for (const pub of room.localParticipant.trackPublications.values()) {
+        if (pub.kind === Track.Kind.Audio && pub.track && pub.track.mediaStreamTrack) {
+          localMicTrack = pub.track.mediaStreamTrack;
+          break;
         }
       }
 
@@ -150,9 +141,9 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       const bufSize = 4096;
 
       // Connect script processors to a silent gain node to prevent speaker feedback loop
-      // We do NOT connect silence to ctx.destination to ensure no physical speaker routing occurs from WebAudio.
       const silence = ctx.createGain();
       silence.gain.value = 0;
+      silence.connect(ctx.destination);
 
       // Local mic capture
       const localSrc = ctx.createMediaStreamSource(localStream);
@@ -161,31 +152,20 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       localSrc.connect(localProc);
       localProc.connect(silence);
 
-      // Remote partner audio from LiveKit (using cached remoteTrackRef or fallback publications scan)
+      // Remote partner audio from LiveKit
       let remoteProc: ScriptProcessorNode | undefined;
-      let remoteMicTrack = remoteTrackRef.current;
-
-      if (!remoteMicTrack) {
-        const remotes = Array.from(room.remoteParticipants.values());
-        if (remotes.length > 0) {
-          for (const pub of remotes[0].trackPublications.values()) {
-            if (pub.kind === Track.Kind.Audio && pub.track && pub.track.mediaStreamTrack) {
-              remoteMicTrack = pub.track.mediaStreamTrack;
-              break;
-            }
+      const remotes = Array.from(room.remoteParticipants.values());
+      if (remotes.length > 0) {
+        for (const pub of remotes[0].trackPublications.values()) {
+          if (pub.kind === Track.Kind.Audio && pub.track) {
+            const remoteSrc = ctx.createMediaStreamSource(new MediaStream([pub.track.mediaStreamTrack]));
+            remoteProc = ctx.createScriptProcessor(bufSize, 1, 1);
+            remoteProc.onaudioprocess = (e) => remoteChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+            remoteSrc.connect(remoteProc);
+            remoteProc.connect(silence);
+            break;
           }
         }
-      }
-
-      if (remoteMicTrack) {
-        const remoteSrc = ctx.createMediaStreamSource(new MediaStream([remoteMicTrack]));
-        remoteProc = ctx.createScriptProcessor(bufSize, 1, 1);
-        remoteProc.onaudioprocess = (e) => remoteChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-        remoteSrc.connect(remoteProc);
-        remoteProc.connect(silence);
-        console.log('[Room] Web Audio connected to remote partner audio track');
-      } else {
-        console.warn('[Room] Remote partner audio track was not found or subscribed yet');
       }
 
       captureRef.current = { ctx, localChunks, remoteChunks, localProc, remoteProc, startTime: Date.now() };
@@ -261,40 +241,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     // Host notifies guest to stop
     if (session.role === 'HOST') {
       await sendData({ type: 'STOP_REC' });
-    } else if (session.role === 'GUEST') {
-      // Background upload remoteBlob (Host audio) to file.io
-      (async () => {
-        try {
-          console.log('[Room] Uploading Host audio backup to file.io...');
-          const formData = new FormData();
-          const hostFileName = `host_backup_${session.pairId}_${recSeq}.wav`;
-          formData.append('file', remoteWav, hostFileName);
-
-          const response = await fetch('https://file.io', {
-            method: 'POST',
-            body: formData,
-          });
-
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const resJson = await response.json();
-          if (resJson.success && resJson.link) {
-            console.log('[Room] Host audio backup upload success:', resJson.link);
-            
-            // Save locally in Guest's DB as well
-            await saveGuestBackupUrl(id, resJson.link);
-            setRecCount((c) => c + 1);
-
-            // Send the link to the host
-            await sendData({
-              type: 'GUEST_UPLOAD_LINK',
-              url: resJson.link,
-              recSeq: recSeq
-            });
-          }
-        } catch (uploadErr) {
-          console.error('[Room] Failed to upload Host audio backup to file.io:', uploadErr);
-        }
-      })();
     }
   }, [session, partnerName, releaseWakeLock, sendData]);
 
@@ -435,16 +381,14 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
         // PLAY incoming remote audio tracks in browser speakers
         if (track.kind === Track.Kind.Audio) {
-          remoteTrackRef.current = track.mediaStreamTrack;
           const element = track.attach();
           document.body.appendChild(element);
-          console.log('[Room] Playing and caching remote audio track');
+          console.log('[Room] Playing remote audio track');
         }
       })
       .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
         if (track.kind === Track.Kind.Audio) {
           track.detach().forEach((el: HTMLElement) => el.remove());
-          remoteTrackRef.current = null;
         }
       })
       .on(RoomEvent.DataReceived, (payload: Uint8Array) => {
@@ -459,14 +403,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
             stopRecordingRef.current();
           } else if (msg.type === 'NEW_SESSION') {
             setConnStateRef.current('ready');
-          } else if (msg.type === 'GUEST_UPLOAD_LINK') {
-            const targetId = `${session.pairId}_HOST_${msg.recSeq}`;
-            saveGuestBackupUrl(targetId, msg.url)
-              .then(() => {
-                setRecCount((c) => c + 1);
-                console.log('[Room] Saved guest backup URL for', targetId);
-              })
-              .catch(console.error);
           }
         } catch (e) {
           console.error('[Room] Failed parsing sync message:', e);
@@ -478,11 +414,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       .then(async () => {
         // Automatically publish microphone audio track
         try {
-          const pub = await room.localParticipant.setMicrophoneEnabled(true);
-          if (pub && pub.track && pub.track.mediaStreamTrack) {
-            localMicTrackRef.current = pub.track.mediaStreamTrack;
-            console.log('[Room] Cached local microphone track publication');
-          }
+          await room.localParticipant.setMicrophoneEnabled(true);
           console.log('[Room] Local microphone published');
         } catch (micErr) {
           console.error('[Room] Failed to publish microphone:', micErr);
@@ -502,9 +434,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       if (playCtxRef.current) {
         playCtxRef.current.close().catch(() => {});
         playCtxRef.current = null;
-      }
-      if (localAudioPlayRef.current) {
-        localAudioPlayRef.current.pause();
       }
       if (localSpeechTimeoutRef.current) clearTimeout(localSpeechTimeoutRef.current);
       if (partnerSpeechTimeoutRef.current) clearTimeout(partnerSpeechTimeoutRef.current);
@@ -635,63 +564,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     } catch (err) {
       alert("Error preparing files for upload: " + String(err));
       setUploadingId(null);
-    }
-  };
-
-  const handlePlayVoice = (rec: RecordingRecord) => {
-    if (playingVoiceId === rec.id) {
-      if (localAudioPlayRef.current) {
-        localAudioPlayRef.current.pause();
-      }
-      setPlayingVoiceId(null);
-    } else {
-      if (localAudioPlayRef.current) {
-        localAudioPlayRef.current.pause();
-      }
-      const url = URL.createObjectURL(rec.localBlob);
-      const audio = new Audio(url);
-      localAudioPlayRef.current = audio;
-      audio.onended = () => setPlayingVoiceId(null);
-      audio.play().catch((err) => console.error("Playback failed", err));
-      setPlayingVoiceId(rec.id);
-    }
-  };
-
-  const shareOnTelegram = async (rec: RecordingRecord) => {
-    try {
-      setSharingTelegramId(rec.id);
-      // 1. Generate ZIP blob
-      const { blob, filename } = await getRecordingZipBlob(rec);
-
-      // 2. Upload to file.io
-      const formData = new FormData();
-      formData.append('file', blob, filename);
-
-      const response = await fetch('https://file.io', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const resJson = await response.json();
-      if (resJson.success && resJson.link) {
-        // 3. Open Telegram to Biswastechx with pre-filled link
-        const text = `Hi, here is the recording ZIP file for Pair ${rec.pairId}.\n\n` +
-          `File Link: ${resJson.link}\n` +
-          `Metadata:\n` +
-          `- Duration: ${rec.durationSec}s\n` +
-          `- Language: ${rec.language}\n` +
-          `- Speaker Name: ${session.myName}\n` +
-          `- Partner Name: ${rec.partnerName}`;
-
-        window.open(`https://t.me/Biswastechx?text=${encodeURIComponent(text)}`, '_blank');
-      } else {
-        alert("Failed to upload ZIP file to file.io. Please try again.");
-      }
-    } catch (err) {
-      alert("Error sharing on Telegram: " + String(err));
-    } finally {
-      setSharingTelegramId(null);
     }
   };
 
@@ -856,23 +728,15 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                           </div>
                           
                           <div className="flex gap-1.5 flex-wrap">
-                            <button onClick={() => handlePlayVoice(rec)}
-                              className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer flex items-center gap-1">
-                              {playingVoiceId === rec.id ? '⏸️ Pause' : '▶️ Play Voice'}
-                            </button>
-                            <button onClick={() => downloadRecordingPair(rec)}
-                              className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                              Download ZIP
-                            </button>
-                            <button onClick={() => shareOnTelegram(rec)} disabled={sharingTelegramId === rec.id}
-                              className="bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer flex items-center gap-1">
-                              {sharingTelegramId === rec.id ? '⏳ Sharing…' : '✈️ Telegram'}
-                            </button>
-                            {session.role === 'HOST' && (
+                            {session.role === 'HOST' ? (
                               <>
+                                <button onClick={() => downloadRecordingPair(rec)}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
+                                  Download ZIP
+                                </button>
                                 <button onClick={() => shareFile(rec)}
                                   className="bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                                  WhatsApp
+                                  Share
                                 </button>
                                 {!rec.uploaded && (
                                   isUploading ? (
@@ -887,17 +751,15 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                                   )
                                 )}
                               </>
+                            ) : (
+                              <>
+                                <button onClick={() => downloadRecordingPair(rec)}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
+                                  Download ZIP
+                                </button>
+                              </>
                             )}
                           </div>
-
-                          {rec.guestBackupUrl && (
-                            <div className="mt-1">
-                              <a href={rec.guestBackupUrl} target="_blank" rel="noreferrer"
-                                className="text-[11px] bg-orange-50 text-orange-700 border border-orange-200 px-2 py-1 rounded-lg hover:bg-orange-100 font-medium inline-flex items-center gap-1">
-                                📁 Host Audio Backup (file.io)
-                              </a>
-                            </div>
-                          )}
                         </div>
                       </div>
                     );

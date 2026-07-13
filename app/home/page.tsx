@@ -1,11 +1,11 @@
 'use client';
 // app/home/page.tsx — Main home page with 3 cards
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { loadProfile, clearProfile } from '@/lib/profile';
 import { getDeviceId } from '@/lib/device';
-import { getAllRecordings, deleteRecording, RecordingRecord, markRecordingAsUploaded, saveGuestBackupUrl } from '@/lib/db';
+import { getAllRecordings, deleteRecording, RecordingRecord, markRecordingAsUploaded } from '@/lib/db';
 import { downloadRecordingPair, downloadAllRecordings, getIndividualFilenames, getRecordingZipBlob } from '@/lib/zip';
 
 type Gender = 'MALE' | 'FEMALE';
@@ -45,11 +45,6 @@ export default function HomePage() {
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
 
-  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
-  const localAudioPlayRef = useRef<HTMLAudioElement | null>(null);
-
-  const [sharingTelegramId, setSharingTelegramId] = useState<string | null>(null);
-
   useEffect(() => {
     const p = loadProfile();
     if (!p) { router.replace('/setup'); return; }
@@ -64,12 +59,6 @@ export default function HomePage() {
       .catch((err) => {
         alert("Microphone permission is required to use this application. Please allow microphone access in your browser settings to continue.");
       });
-
-    return () => {
-      if (localAudioPlayRef.current) {
-        localAudioPlayRef.current.pause();
-      }
-    };
   }, [router]);
 
   // Load recordings when switching to that view
@@ -82,63 +71,6 @@ export default function HomePage() {
       });
     }
   }, [view]);
-
-  const handlePlayVoice = (rec: RecordingRecord) => {
-    if (playingVoiceId === rec.id) {
-      if (localAudioPlayRef.current) {
-        localAudioPlayRef.current.pause();
-      }
-      setPlayingVoiceId(null);
-    } else {
-      if (localAudioPlayRef.current) {
-        localAudioPlayRef.current.pause();
-      }
-      const url = URL.createObjectURL(rec.localBlob);
-      const audio = new Audio(url);
-      localAudioPlayRef.current = audio;
-      audio.onended = () => setPlayingVoiceId(null);
-      audio.play().catch((err) => console.error("Playback failed", err));
-      setPlayingVoiceId(rec.id);
-    }
-  };
-
-  const shareOnTelegram = async (rec: RecordingRecord) => {
-    try {
-      setSharingTelegramId(rec.id);
-      // 1. Generate ZIP blob
-      const { blob, filename } = await getRecordingZipBlob(rec);
-
-      // 2. Upload to file.io
-      const formData = new FormData();
-      formData.append('file', blob, filename);
-
-      const response = await fetch('https://file.io', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const resJson = await response.json();
-      if (resJson.success && resJson.link) {
-        // 3. Open Telegram to Biswastechx with pre-filled link
-        const text = `Hi, here is the recording ZIP file for Pair ${rec.pairId}.\n\n` +
-          `File Link: ${resJson.link}\n` +
-          `Metadata:\n` +
-          `- Duration: ${rec.durationSec}s\n` +
-          `- Language: ${rec.language}\n` +
-          `- Speaker Name: ${profile?.name || 'Unknown'}\n` +
-          `- Partner Name: ${rec.partnerName}`;
-
-        window.open(`https://t.me/Biswastechx?text=${encodeURIComponent(text)}`, '_blank');
-      } else {
-        alert("Failed to upload ZIP file to file.io. Please try again.");
-      }
-    } catch (err) {
-      alert("Error sharing on Telegram: " + String(err));
-    } finally {
-      setSharingTelegramId(null);
-    }
-  };
 
   const downloadSingleBlob = (blob: Blob, fileName: string) => {
     const url = URL.createObjectURL(blob);
@@ -488,30 +420,14 @@ export default function HomePage() {
                       )}
                     </div>
                     <p className="text-xs text-slate-400 mt-1.5">Partner: {rec.partnerName} ({rec.partnerGender})</p>
-                    {rec.guestBackupUrl && (
-                      <div className="mt-2">
-                        <a href={rec.guestBackupUrl} target="_blank" rel="noreferrer"
-                          className="text-[10px] bg-orange-50 text-orange-700 border border-orange-200 px-2 py-0.5 rounded-full font-medium inline-flex items-center gap-1">
-                          📁 Host Audio Backup (file.io)
-                        </a>
-                      </div>
-                    )}
                   </div>
                   <div className="flex flex-col gap-1.5 shrink-0 w-28">
-                    <button onClick={() => handlePlayVoice(rec)}
-                      className="text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2 py-1 rounded-lg font-medium cursor-pointer flex items-center justify-center gap-1">
-                      {playingVoiceId === rec.id ? '⏸️ Pause' : '▶️ Play Voice'}
-                    </button>
-                    <button onClick={() => downloadRecordingPair(rec)}
-                      className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
-                      Download ZIP
-                    </button>
-                    <button onClick={() => shareOnTelegram(rec)} disabled={sharingTelegramId === rec.id}
-                      className="text-[11px] bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white px-2 py-1 rounded-lg font-medium cursor-pointer flex items-center justify-center gap-1">
-                      {sharingTelegramId === rec.id ? '⏳ Sharing…' : '✈️ Telegram'}
-                    </button>
                     {rec.role === 'HOST' ? (
                       <>
+                        <button onClick={() => downloadRecordingPair(rec)}
+                          className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
+                          Download ZIP
+                        </button>
                         {!rec.uploaded && (
                           uploadingId === rec.id ? (
                             <span className="text-[11px] bg-purple-50 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium text-center animate-pulse">
@@ -525,7 +441,14 @@ export default function HomePage() {
                           )
                         )}
                       </>
-                    ) : null}
+                    ) : (
+                      <>
+                        <button onClick={() => downloadRecordingPair(rec)}
+                          className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
+                          Download ZIP
+                        </button>
+                      </>
+                    )}
                     <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
                       className="text-[11px] bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1 rounded-lg font-medium border border-red-200 disabled:opacity-50 cursor-pointer">
                       {deletingId === rec.id ? '…' : 'Delete'}

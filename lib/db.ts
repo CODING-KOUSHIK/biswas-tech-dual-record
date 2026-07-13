@@ -21,7 +21,6 @@ export interface RecordingRecord extends RecordingMeta {
   localBlob: Blob;  // own microphone WAV
   remoteBlob: Blob; // partner audio WAV
   uploaded?: boolean; // Track if uploaded to Google Drive
-  guestBackupUrl?: string; // file.io URL of host audio sent from guest
 }
 
 interface BTDSchema extends DBSchema {
@@ -73,15 +72,6 @@ export async function markRecordingAsUploaded(id: string): Promise<void> {
   const rec = await db.get('recordings', id);
   if (rec) {
     rec.uploaded = true;
-    await db.put('recordings', rec);
-  }
-}
-
-export async function saveGuestBackupUrl(id: string, url: string): Promise<void> {
-  const db = await getDB();
-  const rec = await db.get('recordings', id);
-  if (rec) {
-    rec.guestBackupUrl = url;
     await db.put('recordings', rec);
   }
 }
