@@ -380,31 +380,16 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
         }
       })
       .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
-        // PLAY incoming remote audio tracks in browser speakers (routing to loud speaker via Web Audio API)
+        // PLAY incoming remote audio tracks in browser speakers
         if (track.kind === Track.Kind.Audio) {
-          try {
-            if (playCtxRef.current) {
-              playCtxRef.current.close().catch(() => {});
-            }
-            const playCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-            playCtxRef.current = playCtx;
-            const source = playCtx.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
-            source.connect(playCtx.destination);
-            console.log('[Room] Playing remote track through Web Audio Context (loud speaker)');
-          } catch (e) {
-            console.warn('[Room] Web Audio remote playback failed, falling back to attach()', e);
-            const element = track.attach();
-            document.body.appendChild(element);
-          }
+          const element = track.attach();
+          document.body.appendChild(element);
+          console.log('[Room] Playing remote audio track');
         }
       })
       .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
         if (track.kind === Track.Kind.Audio) {
           track.detach().forEach((el: HTMLElement) => el.remove());
-          if (playCtxRef.current) {
-            playCtxRef.current.close().catch(() => {});
-            playCtxRef.current = null;
-          }
         }
       })
       .on(RoomEvent.DataReceived, (payload: Uint8Array) => {
