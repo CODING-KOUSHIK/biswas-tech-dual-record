@@ -264,16 +264,17 @@ export default function HomePage() {
           <div className="space-y-3 pt-2">
             {recordings.map((rec) => (
               <div key={rec.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="font-bold text-slate-900">Pair #{rec.pairId}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{formatDate(rec.createdAt)}</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-mono text-xs font-semibold text-slate-800 break-all">{rec.fileName}</p>
+                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {rec.id}</p>
+                    <p className="text-xs text-slate-500 mt-1">{formatDate(rec.createdAt)}</p>
                     <div className="flex flex-wrap gap-2 mt-2">
-                      <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{rec.role}</span>
-                      <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{rec.language}</span>
-                      <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{formatDuration(rec.durationSec)}</span>
+                      <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{rec.role}</span>
+                      <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{rec.language}</span>
+                      <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{formatDuration(rec.durationSec)}</span>
                     </div>
-                    <p className="text-xs text-slate-400 mt-1">Partner: {rec.partnerName} ({rec.partnerGender})</p>
+                    <p className="text-xs text-slate-400 mt-1.5">Partner: {rec.partnerName} ({rec.partnerGender})</p>
                   </div>
                   <div className="flex flex-col gap-2 shrink-0">
                     <button onClick={() => downloadRecordingPair(rec)}

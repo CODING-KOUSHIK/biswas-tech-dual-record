@@ -25,19 +25,21 @@ export async function downloadRecordingPair(record: RecordingRecord): Promise<vo
   f.file(localName, record.localBlob);
   f.file(remoteName, record.remoteBlob);
 
-  const metadata = {
-    pairId: record.pairId,
-    createdAt: new Date(record.createdAt).toISOString(),
-    durationSeconds: record.durationSec,
-    language: record.language,
-    role: record.role,
-    deviceId: record.deviceId,
-    gender: record.gender,
-    partnerName: record.partnerName,
-    partnerGender: record.partnerGender,
-    files: [localName, remoteName],
-  };
-  f.file('metadata.json', JSON.stringify(metadata, null, 2));
+  const metaText = `Pair ID: ${record.pairId}
+Date: ${new Date(record.createdAt).toISOString()}
+Duration: ${record.durationSec} seconds
+Language: ${record.language}
+Role: ${record.role}
+Device ID: ${record.deviceId}
+Gender: ${record.gender}
+Partner Name: ${record.partnerName}
+Partner Gender: ${record.partnerGender}
+Partner Device ID: ${(record as any).partnerDeviceId || 'unknown'}
+Files:
+- ${localName}
+- ${remoteName}`;
+
+  f.file('metadata.txt', metaText);
 
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
   triggerDownload(blob, `Meeting_${record.pairId}.zip`);
@@ -66,18 +68,21 @@ export async function downloadAllRecordings(records: RecordingRecord[]): Promise
     folder.file(localName, record.localBlob);
     folder.file(remoteName, record.remoteBlob);
 
-    const metadata = {
-      pairId: record.pairId,
-      createdAt: new Date(record.createdAt).toISOString(),
-      durationSeconds: record.durationSec,
-      language: record.language,
-      role: record.role,
-      deviceId: record.deviceId,
-      gender: record.gender,
-      partnerName: record.partnerName,
-      partnerGender: record.partnerGender,
-    };
-    folder.file('metadata.json', JSON.stringify(metadata, null, 2));
+    const metaText = `Pair ID: ${record.pairId}
+Date: ${new Date(record.createdAt).toISOString()}
+Duration: ${record.durationSec} seconds
+Language: ${record.language}
+Role: ${record.role}
+Device ID: ${record.deviceId}
+Gender: ${record.gender}
+Partner Name: ${record.partnerName}
+Partner Gender: ${record.partnerGender}
+Partner Device ID: ${(record as any).partnerDeviceId || 'unknown'}
+Files:
+- ${localName}
+- ${remoteName}`;
+
+    folder.file('metadata.txt', metaText);
   }
 
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });

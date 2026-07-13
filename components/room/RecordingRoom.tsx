@@ -1,6 +1,6 @@
 'use client';
 // components/room/RecordingRoom.tsx
-// Core room component with single-mic hardware capture & Host/Guest sync controls
+// Core room component with single-mic capture, Host/Guest sync, and WhatsApp sharing
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -17,8 +17,10 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, mergeChunks } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence } from '@/lib/db';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord } from '@/lib/db';
+import { downloadRecordingPair } from '@/lib/zip';
 import { useWakeLock } from '@/hooks/useWakeLock';
+import JSZip from 'jszip';
 
 interface Session {
   myName: string;
@@ -76,6 +78,9 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const [recSeconds, setRecSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [recCount, setRecCount] = useState(0);
+
+  // Saved recordings in the current session
+  const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
 
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -203,7 +208,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     // Calculate dynamic sequence naming and build output filenames
     const { pairSeq, recSeq } = await getRecordingSequence(session.pairId);
     const fileName = buildFileName(session.myDeviceId, session.myLanguage, session.myGender, session.role, pairSeq, recSeq, session.myName);
-    const id = buildRecordingId(session.pairId, session.role);
+    const id = `${session.pairId}_${session.role}_${recSeq}`; // unique id for multiple recordings in same pair
 
     await saveRecording({
       id,
@@ -237,6 +242,14 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     stopRecordingRef.current = stopRecording;
     setConnStateRef.current = setConnState;
   }, [startRecording, stopRecording]);
+
+  // Load recordings in current session on load or update
+  useEffect(() => {
+    getAllRecordings().then((recs) => {
+      const filtered = recs.filter((r) => r.pairId === session.pairId);
+      setCurrentRecordings(filtered);
+    });
+  }, [session.pairId, recCount]);
 
   // ─── CONNECT (runs exactly once per token/url) ────────────────────────────
   useEffect(() => {
@@ -438,6 +451,74 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     sendData({ type: 'NEW_SESSION' });
   };
 
+  // ─── WHATSAPP SHARE ZIP HELPER ───────────────────────────────────────────
+  const shareFile = async (rec: RecordingRecord) => {
+    const zip = new JSZip();
+    const f = zip.folder(`Meeting_${rec.pairId}`)!;
+
+    const localName = rec.fileName;
+    const match = rec.fileName.match(/_PAIR(\d+)\s*-\s*(\d+)\(/);
+    const pairPadded = match ? match[1] : '001';
+    const recPadded = match ? match[2] : '001';
+
+    const remoteRole = rec.role === 'HOST' ? 'guest' : 'host';
+    const remoteDeviceId = rec.partnerDeviceId ? rec.partnerDeviceId.toLowerCase() : 'unknown';
+    const remoteGender = rec.partnerGender.toLowerCase();
+    const remoteLanguage = rec.language.toLowerCase();
+    const remoteSpeakerName = rec.partnerName.trim().replace(/\s+/g, '_');
+
+    const remoteName = `${remoteLanguage}_${remoteRole}_${remoteDeviceId}_${remoteGender}_PAIR${pairPadded} - ${recPadded}(${remoteSpeakerName}).wav`;
+
+    f.file(localName, rec.localBlob);
+    f.file(remoteName, rec.remoteBlob);
+
+    const metaText = `Pair ID: ${rec.pairId}
+Date: ${new Date(rec.createdAt).toISOString()}
+Duration: ${rec.durationSec} seconds
+Language: ${rec.language}
+Role: ${rec.role}
+Device ID: ${rec.deviceId}
+Gender: ${rec.gender}
+Partner Name: ${rec.partnerName}
+Partner Gender: ${rec.partnerGender}
+Partner Device ID: ${rec.partnerDeviceId || 'unknown'}
+Files:
+- ${localName}
+- ${remoteName}`;
+
+    f.file('metadata.txt', metaText);
+
+    try {
+      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+      const zipFile = new File([zipBlob], `Meeting_${rec.pairId}.zip`, { type: 'application/zip' });
+
+      // Check if Web Share API handles ZIP sharing
+      if (navigator.canShare && navigator.canShare({ files: [zipFile] })) {
+        await navigator.share({
+          files: [zipFile],
+          title: `Meeting_${rec.pairId}.zip`,
+          text: `Biswas Tech Dual Recording files for Pair ${rec.pairId}`,
+        });
+        return;
+      }
+    } catch (e) {
+      console.warn('[Room] Web Share failed, falling back to WhatsApp text message:', e);
+    }
+
+    // Fallback: Open WhatsApp direct text message link to +919093647448
+    const text = `Hi, I have completed the recording for Pair ${rec.pairId}.\n\n` +
+      `File: ${rec.fileName}\n` +
+      `Duration: ${rec.durationSec}s\n` +
+      `Language: ${rec.language}\n` +
+      `Role: ${rec.role}\n` +
+      `Device ID: ${rec.deviceId}\n` +
+      `Gender: ${rec.gender}\n` +
+      `Partner: ${rec.partnerName}\n` +
+      `Partner Device ID: ${rec.partnerDeviceId || 'unknown'}`;
+
+    window.open(`https://api.whatsapp.com/send?phone=919093647448&text=${encodeURIComponent(text)}`, '_blank');
+  };
+
   return (
     <div className="min-h-screen bg-white flex flex-col">
       {/* Header */}
@@ -576,6 +657,33 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                   </div>
                 )}
               </>
+            )}
+
+            {/* Session Recordings List (WAV file list inside meeting room) */}
+            {currentRecordings.length > 0 && (
+              <div className="w-full border-t border-slate-200 pt-4 mt-2 space-y-2">
+                <h3 className="font-semibold text-slate-800 text-sm">Saved Recordings this Session:</h3>
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {currentRecordings.map((rec) => (
+                    <div key={rec.id + rec.createdAt} className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col gap-2 shadow-xs">
+                      <p className="text-xs font-mono text-slate-700 break-all">{rec.fileName}</p>
+                      <div className="flex items-center justify-between text-xs text-slate-500">
+                        <span>Duration: {rec.durationSec}s</span>
+                        <div className="flex gap-2">
+                          <button onClick={() => downloadRecordingPair(rec)}
+                            className="bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-md hover:bg-blue-100 font-medium cursor-pointer">
+                            Download
+                          </button>
+                          <button onClick={() => shareFile(rec)}
+                            className="bg-green-50 text-green-600 border border-green-200 px-2.5 py-1 rounded-md hover:bg-green-100 font-medium flex items-center gap-1 cursor-pointer">
+                            Share (WhatsApp)
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
 
             <p className="text-center text-xs text-slate-400">
