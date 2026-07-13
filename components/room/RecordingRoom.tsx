@@ -63,6 +63,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const connectedRef = useRef(false);
   const partnerDeviceIdRef = useRef<string>('unknown');
   const isLocalStreamFallbackRef = useRef<boolean>(false);
+  const playCtxRef = useRef<AudioContext | null>(null);
 
   const [connState, setConnState] = useState<ConnState>('connecting');
   const [errorMsg, setErrorMsg] = useState('');
@@ -379,16 +380,31 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
         }
       })
       .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
-        // PLAY incoming remote audio tracks in browser speakers
+        // PLAY incoming remote audio tracks in browser speakers (routing to loud speaker via Web Audio API)
         if (track.kind === Track.Kind.Audio) {
-          const element = track.attach();
-          document.body.appendChild(element);
-          console.log('[Room] Playing remote audio track');
+          try {
+            if (playCtxRef.current) {
+              playCtxRef.current.close().catch(() => {});
+            }
+            const playCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            playCtxRef.current = playCtx;
+            const source = playCtx.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
+            source.connect(playCtx.destination);
+            console.log('[Room] Playing remote track through Web Audio Context (loud speaker)');
+          } catch (e) {
+            console.warn('[Room] Web Audio remote playback failed, falling back to attach()', e);
+            const element = track.attach();
+            document.body.appendChild(element);
+          }
         }
       })
       .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
         if (track.kind === Track.Kind.Audio) {
           track.detach().forEach((el: HTMLElement) => el.remove());
+          if (playCtxRef.current) {
+            playCtxRef.current.close().catch(() => {});
+            playCtxRef.current = null;
+          }
         }
       })
       .on(RoomEvent.DataReceived, (payload: Uint8Array) => {
@@ -431,6 +447,10 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       room.disconnect();
       // Remove any leftover audio tags
       document.querySelectorAll('audio').forEach((el) => el.remove());
+      if (playCtxRef.current) {
+        playCtxRef.current.close().catch(() => {});
+        playCtxRef.current = null;
+      }
       if (localSpeechTimeoutRef.current) clearTimeout(localSpeechTimeoutRef.current);
       if (partnerSpeechTimeoutRef.current) clearTimeout(partnerSpeechTimeoutRef.current);
     };
@@ -440,14 +460,12 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   // ─── LEAVE WARNING ────────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
-      if (connState === 'recording') {
-        e.preventDefault();
-        return (e.returnValue = 'Recording is in progress. Are you sure you want to leave?');
-      }
+      e.preventDefault();
+      return (e.returnValue = 'Refreshing will disconnect you from the recording session. Are you sure you want to leave?');
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [connState]);
+  }, []);
 
   const fmtTime = (s: number) => `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
   const sigLabel = { excellent: '● Excellent', good: '● Good', poor: '● Weak', unknown: '○ --' }[mySignal];
@@ -782,30 +800,22 @@ Files:
                           <div className="flex gap-1.5 flex-wrap">
                             {session.role === 'HOST' ? (
                               <>
-                                <button onClick={() => downloadSingleBlob(hostBlob, hostName)}
-                                  className="bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-md hover:bg-blue-100 font-medium text-xs cursor-pointer">
-                                  Download Host
-                                </button>
-                                <button onClick={() => downloadSingleBlob(guestBlob, guestName)}
-                                  className="bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-md hover:bg-blue-100 font-medium text-xs cursor-pointer">
-                                  Download Guest
-                                </button>
                                 <button onClick={() => downloadRecordingPair(rec)}
-                                  className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded-md hover:bg-indigo-100 font-medium text-xs cursor-pointer">
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
                                   Download ZIP
                                 </button>
                                 <button onClick={() => shareFile(rec)}
-                                  className="bg-green-50 text-green-600 border border-green-200 px-2 py-0.5 rounded-md hover:bg-green-100 font-medium text-xs cursor-pointer">
+                                  className="bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
                                   Share
                                 </button>
                                 {!rec.uploaded && (
                                   isUploading ? (
-                                    <span className="bg-purple-50 text-purple-600 border border-purple-200 px-2 py-0.5 rounded-md font-medium text-xs flex items-center gap-1 animate-pulse">
+                                    <span className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md font-medium text-xs flex items-center gap-1 animate-pulse">
                                       Uploading: {uploadProgress}%
                                     </span>
                                   ) : (
                                     <button onClick={() => handleUploadToDrive(rec)}
-                                      className="bg-purple-50 text-purple-600 border border-purple-200 px-2 py-0.5 rounded-md hover:bg-purple-100 font-medium text-xs cursor-pointer">
+                                      className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md hover:bg-purple-100 font-medium text-xs cursor-pointer">
                                       Upload to Drive
                                     </button>
                                   )
@@ -813,9 +823,9 @@ Files:
                               </>
                             ) : (
                               <>
-                                <button onClick={() => downloadSingleBlob(guestBlob, guestName)}
-                                  className="bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-md hover:bg-blue-100 font-medium text-xs cursor-pointer">
-                                  Download Your Voice
+                                <button onClick={() => downloadRecordingPair(rec)}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
+                                  Download ZIP
                                 </button>
                               </>
                             )}

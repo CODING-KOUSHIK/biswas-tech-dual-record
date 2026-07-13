@@ -215,6 +215,38 @@ export default function HomePage() {
     setDownloadingAll(false);
   };
 
+  const handleResetAppData = async () => {
+    if (!confirm('WARNING: Are you sure you want to delete all recordings and reset all profile settings? This cannot be undone.')) {
+      return;
+    }
+
+    try {
+      // 1. Delete IndexedDB
+      const req = indexedDB.deleteDatabase('btd-recordings');
+      await new Promise<void>((resolve, reject) => {
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(new Error('IndexedDB deletion failed'));
+        req.onblocked = () => resolve(); // Ignore block, proceed
+      });
+
+      // 2. Clear LocalStorage and SessionStorage
+      localStorage.clear();
+      sessionStorage.clear();
+
+      // 3. Clear all cookies
+      document.cookie.split(";").forEach((c) => {
+        document.cookie = c
+          .replace(/^ +/, "")
+          .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+      });
+
+      alert('App reset successful. Redirecting to setup...');
+      router.replace('/setup');
+    } catch (err) {
+      alert('Error during reset: ' + String(err));
+    }
+  };
+
   if (!profile) return (
     <div className="min-h-screen bg-white flex items-center justify-center">
       <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
@@ -230,8 +262,10 @@ export default function HomePage() {
             <h1 className="text-lg font-bold text-slate-900">Biswas Tech</h1>
             <p className="text-xs text-slate-500">{profile.name} · {deviceId} · {profile.language}</p>
           </div>
-          <button onClick={() => { clearProfile(); router.replace('/setup'); }}
-            className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1">Reset</button>
+          <button onClick={handleResetAppData}
+            className="text-xs bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 rounded-lg px-2.5 py-1.5 font-medium cursor-pointer">
+            Reset & Clear Storage
+          </button>
         </div>
       </header>
 
@@ -381,20 +415,6 @@ export default function HomePage() {
                   <div className="flex flex-col gap-1.5 shrink-0 w-28">
                     {rec.role === 'HOST' ? (
                       <>
-                        <button onClick={() => {
-                          const { hostName, hostBlob } = getIndividualFilenames(rec);
-                          downloadSingleBlob(hostBlob, hostName);
-                        }}
-                          className="text-[11px] bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2 py-1 rounded-lg font-medium cursor-pointer">
-                          Download Host
-                        </button>
-                        <button onClick={() => {
-                          const { guestName, guestBlob } = getIndividualFilenames(rec);
-                          downloadSingleBlob(guestBlob, guestName);
-                        }}
-                          className="text-[11px] bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2 py-1 rounded-lg font-medium cursor-pointer">
-                          Download Guest
-                        </button>
                         <button onClick={() => downloadRecordingPair(rec)}
                           className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
                           Download ZIP
@@ -414,12 +434,9 @@ export default function HomePage() {
                       </>
                     ) : (
                       <>
-                        <button onClick={() => {
-                          const { guestName, guestBlob } = getIndividualFilenames(rec);
-                          downloadSingleBlob(guestBlob, guestName);
-                        }}
-                          className="text-[11px] bg-blue-600 hover:bg-blue-700 text-white px-2 py-1.5 rounded-lg font-medium cursor-pointer">
-                          Download Voice
+                        <button onClick={() => downloadRecordingPair(rec)}
+                          className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
+                          Download ZIP
                         </button>
                       </>
                     )}
