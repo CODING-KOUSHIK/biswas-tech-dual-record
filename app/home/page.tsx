@@ -100,6 +100,27 @@ export default function HomePage() {
     }
   };
 
+  const shareFileTelegram = async (rec: RecordingRecord) => {
+    try {
+      const { blob, filename } = await getRecordingZipBlob(rec);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 5000);
+    } catch (e) {
+      console.error('[Home] Failed downloading ZIP for share:', e);
+    }
+    // Direct link to Telegram user Biswastechx
+    window.open('https://t.me/Biswastechx', '_blank');
+  };
+
   const downloadSingleBlob = (blob: Blob, fileName: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -454,32 +475,25 @@ export default function HomePage() {
                       className="text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2 py-1 rounded-lg font-medium cursor-pointer flex items-center justify-center gap-1">
                       {playingVoiceId === rec.id ? '⏸️ Pause' : '▶️ Play Voice'}
                     </button>
-                    {rec.role === 'HOST' ? (
-                      <>
-                        <button onClick={() => downloadRecordingPair(rec)}
-                          className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
-                          Download ZIP
+                    <button onClick={() => downloadRecordingPair(rec)}
+                      className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
+                      Download ZIP
+                    </button>
+                    <button onClick={() => shareFileTelegram(rec)}
+                      className="text-[11px] bg-sky-500 hover:bg-sky-600 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
+                      Share (Telegram)
+                    </button>
+                    {rec.role === 'HOST' && !rec.uploaded && (
+                      uploadingId === rec.id ? (
+                        <span className="text-[11px] bg-purple-50 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium text-center animate-pulse">
+                          {uploadProgress}%
+                        </span>
+                      ) : (
+                        <button onClick={() => handleUploadToDrive(rec)}
+                          className="text-[11px] bg-purple-50 hover:bg-purple-100 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium cursor-pointer">
+                          Upload Drive
                         </button>
-                        {!rec.uploaded && (
-                          uploadingId === rec.id ? (
-                            <span className="text-[11px] bg-purple-50 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium text-center animate-pulse">
-                              {uploadProgress}%
-                            </span>
-                          ) : (
-                            <button onClick={() => handleUploadToDrive(rec)}
-                              className="text-[11px] bg-purple-50 hover:bg-purple-100 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium cursor-pointer">
-                              Upload Drive
-                            </button>
-                          )
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <button onClick={() => downloadRecordingPair(rec)}
-                          className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
-                          Download ZIP
-                        </button>
-                      </>
+                      )
                     )}
                     <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
                       className="text-[11px] bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1 rounded-lg font-medium border border-red-200 disabled:opacity-50 cursor-pointer">

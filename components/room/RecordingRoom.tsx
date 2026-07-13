@@ -128,7 +128,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       if (!localMicTrack) {
         console.warn('[Room] LiveKit local mic track not found. Using fallback getUserMedia.');
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         });
         localMicTrack = stream.getAudioTracks()[0];
         isFallback = true;
@@ -415,10 +415,14 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     console.log('[Room] Connecting to', livekitUrl, '| room:', roomId);
     room.connect(livekitUrl, livekitToken, { autoSubscribe: true })
       .then(async () => {
-        // Automatically publish microphone audio track
+        // Automatically publish microphone audio track (completely unprocessed)
         try {
-          await room.localParticipant.setMicrophoneEnabled(true);
-          console.log('[Room] Local microphone published');
+          await room.localParticipant.setMicrophoneEnabled(true, {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          });
+          console.log('[Room] Local microphone published (unprocessed)');
         } catch (micErr) {
           console.error('[Room] Failed to publish microphone:', micErr);
         }
@@ -466,18 +470,26 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     sendData({ type: 'NEW_SESSION' });
   };
 
-  // ─── WHATSAPP SHARE ZIP HELPER ───────────────────────────────────────────
-  const shareFile = (rec: RecordingRecord) => {
-    const text = `Hi, I have completed the recording for Pair ${rec.pairId}.\n\n` +
-      `File: ${rec.fileName}\n` +
-      `Duration: ${rec.durationSec}s\n` +
-      `Language: ${rec.language}\n` +
-      `Role: ${rec.role}\n` +
-      `Device ID: ${rec.deviceId}\n` +
-      `Gender: ${rec.gender}\n` +
-      `Partner: ${rec.partnerName}`;
-
-    window.open(`https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`, '_blank');
+  // ─── TELEGRAM SHARE ZIP HELPER ───────────────────────────────────────────
+  const shareFileTelegram = async (rec: RecordingRecord) => {
+    try {
+      const { blob, filename } = await getRecordingZipBlob(rec);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 5000);
+    } catch (e) {
+      console.error('[Room] Failed downloading ZIP for share:', e);
+    }
+    // Direct link to Telegram user Biswastechx
+    window.open('https://t.me/Biswastechx', '_blank');
   };
 
   const downloadSingleBlob = (blob: Blob, fileName: string) => {
@@ -757,36 +769,25 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                               className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer flex items-center gap-1">
                               {playingVoiceId === rec.id ? '⏸️ Pause' : '▶️ Play Voice'}
                             </button>
-                            {session.role === 'HOST' ? (
-                              <>
-                                <button onClick={() => downloadRecordingPair(rec)}
-                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                                  Download ZIP
+                            <button onClick={() => downloadRecordingPair(rec)}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
+                              Download ZIP
+                            </button>
+                            <button onClick={() => shareFileTelegram(rec)}
+                              className="bg-sky-500 hover:bg-sky-600 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
+                              Share (Telegram)
+                            </button>
+                            {session.role === 'HOST' && !rec.uploaded && (
+                              isUploading ? (
+                                <span className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md font-medium text-xs flex items-center gap-1 animate-pulse">
+                                  Uploading: {uploadProgress}%
+                                </span>
+                              ) : (
+                                <button onClick={() => handleUploadToDrive(rec)}
+                                  className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md hover:bg-purple-100 font-medium text-xs cursor-pointer">
+                                  Upload to Drive
                                 </button>
-                                <button onClick={() => shareFile(rec)}
-                                  className="bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                                  Share
-                                </button>
-                                {!rec.uploaded && (
-                                  isUploading ? (
-                                    <span className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md font-medium text-xs flex items-center gap-1 animate-pulse">
-                                      Uploading: {uploadProgress}%
-                                    </span>
-                                  ) : (
-                                    <button onClick={() => handleUploadToDrive(rec)}
-                                      className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md hover:bg-purple-100 font-medium text-xs cursor-pointer">
-                                      Upload to Drive
-                                    </button>
-                                  )
-                                )}
-                              </>
-                            ) : (
-                              <>
-                                <button onClick={() => downloadRecordingPair(rec)}
-                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                                  Download ZIP
-                                </button>
-                              </>
+                              )
                             )}
                           </div>
                         </div>
