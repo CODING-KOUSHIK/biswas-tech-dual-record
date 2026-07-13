@@ -1,26 +1,24 @@
 'use client';
 
-// app/login/page.tsx — BYPASSED: auto-logs in and redirects to dashboard
-// TODO: Restore real login form when auth is re-enabled.
-
+// app/login/page.tsx — Redirect to / (setup) or /home
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
   const router = useRouter();
-
   useEffect(() => {
-    fetch('/api/auth/autologin')
-      .then(() => router.replace('/dashboard'))
-      .catch(() => router.replace('/dashboard'));
+    const name = localStorage.getItem('btd_name');
+    const gender = localStorage.getItem('btd_gender');
+    if (name && gender) {
+      router.replace('/home');
+    } else {
+      router.replace('/');
+    }
   }, [router]);
 
   return (
     <div className="min-h-screen bg-[#0A0F1E] flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold text-white mb-2">Biswas Tech</h1>
-        <p className="text-gray-400 text-sm">Loading…</p>
-      </div>
+      <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
     </div>
   );
 }
