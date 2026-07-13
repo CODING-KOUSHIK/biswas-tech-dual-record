@@ -130,7 +130,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       if (!localMicTrack) {
         console.warn('[Room] LiveKit local mic track not found. Using fallback getUserMedia.');
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         localMicTrack = stream.getAudioTracks()[0];
         isFallback = true;
@@ -459,10 +459,14 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     console.log('[Room] Connecting to', livekitUrl, '| room:', roomId);
     room.connect(livekitUrl, livekitToken, { autoSubscribe: true })
       .then(async () => {
-        // Automatically publish microphone audio track
+        // Automatically publish microphone audio track with high-performance echo cancellation
         try {
-          await room.localParticipant.setMicrophoneEnabled(true);
-          console.log('[Room] Local microphone published');
+          await room.localParticipant.setMicrophoneEnabled(true, {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          });
+          console.log('[Room] Local microphone published with echoCancellation: true');
         } catch (micErr) {
           console.error('[Room] Failed to publish microphone:', micErr);
         }
