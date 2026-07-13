@@ -1,0 +1,394 @@
+'use client';
+// components/room/RecordingRoom.tsx
+// Core room component. CRITICAL FIX: useEffect deps = [token, url] only — no state in deps.
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  Room,
+  RoomEvent,
+  RoomOptions,
+  LocalParticipant,
+  RemoteParticipant,
+  Participant,
+  ConnectionQuality,
+  Track,
+  DisconnectReason,
+} from 'livekit-client';
+import { encodeWav, mergeChunks } from '@/lib/wav';
+import { saveRecording, buildRecordingId, buildFileName } from '@/lib/db';
+import { useWakeLock } from '@/hooks/useWakeLock';
+
+interface Session {
+  myName: string;
+  myGender: string;
+  myDeviceId: string;
+  myLanguage: string;
+  partnerName: string;
+  partnerGender: string;
+  role: 'HOST' | 'GUEST';
+  pairId: string;
+}
+
+interface Props {
+  roomId: string;
+  livekitToken: string;
+  livekitUrl: string;
+  session: Session;
+}
+
+type ConnState = 'connecting' | 'waiting' | 'ready' | 'recording' | 'stopping' | 'done' | 'disconnected' | 'error';
+type Signal = 'excellent' | 'good' | 'poor' | 'unknown';
+
+interface AudioCapture {
+  ctx: AudioContext;
+  localChunks: Float32Array[];
+  remoteChunks: Float32Array[];
+  localProc: ScriptProcessorNode;
+  remoteProc?: ScriptProcessorNode;
+  startTime: number;
+}
+
+export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Props) {
+  const router = useRouter();
+  const { acquire: acquireWakeLock, release: releaseWakeLock } = useWakeLock();
+
+  const roomRef = useRef<Room | null>(null);
+  const captureRef = useRef<AudioCapture | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const connectedRef = useRef(false);
+
+  const [connState, setConnState] = useState<ConnState>('connecting');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [partnerConnected, setPartnerConnected] = useState(false);
+  const [partnerName, setPartnerName] = useState(session.partnerName);
+  const [mySignal, setMySignal] = useState<Signal>('unknown');
+  const [iAmSpeaking, setIAmSpeaking] = useState(false);
+  const [partnerSpeaking, setPartnerSpeaking] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [recCount, setRecCount] = useState(0);
+
+  // ─── CONNECT (runs exactly once per token/url) ────────────────────────────
+  useEffect(() => {
+    // Guard against React strict mode double invocation
+    if (connectedRef.current) return;
+    connectedRef.current = true;
+
+    const options: RoomOptions = {
+      adaptiveStream: true,
+      dynacast: true,
+      audioCaptureDefaults: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 44100,
+      },
+    };
+
+    const room = new Room(options);
+    roomRef.current = room;
+
+    const updatePartners = () => {
+      const remotes = Array.from(room.remoteParticipants.values());
+      const has = remotes.length > 0;
+      setPartnerConnected(has);
+      if (has) {
+        const p = remotes[0];
+        try {
+          const meta = JSON.parse(p.metadata ?? '{}') as { name?: string };
+          setPartnerName(meta.name ?? p.identity ?? session.partnerName);
+        } catch {
+          setPartnerName(p.identity ?? session.partnerName);
+        }
+      }
+      setConnState((cur) => {
+        if (cur === 'recording' || cur === 'stopping' || cur === 'done') return cur;
+        return has ? 'ready' : 'waiting';
+      });
+    };
+
+    room
+      .on(RoomEvent.Connected, () => {
+        console.log('[Room] Connected ✓', roomId);
+        setConnState('waiting');
+        updatePartners();
+      })
+      .on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+        if (reason === DisconnectReason.CLIENT_INITIATED) return;
+        console.log('[Room] Disconnected', reason);
+        setConnState('disconnected');
+        setErrorMsg('Disconnected. Check your internet connection.');
+      })
+      .on(RoomEvent.Reconnecting, () => setConnState('connecting'))
+      .on(RoomEvent.Reconnected, () => updatePartners())
+      .on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
+        console.log('[Room] Partner joined:', p.identity);
+        updatePartners();
+      })
+      .on(RoomEvent.ParticipantDisconnected, () => updatePartners())
+      .on(RoomEvent.ConnectionQualityChanged, (q: ConnectionQuality, p: Participant) => {
+        if (p instanceof LocalParticipant) {
+          setMySignal(q === ConnectionQuality.Excellent ? 'excellent' : q === ConnectionQuality.Good ? 'good' : 'poor');
+        }
+      })
+      .on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
+        setIAmSpeaking(speakers.some((s) => s instanceof LocalParticipant));
+        setPartnerSpeaking(speakers.some((s) => s instanceof RemoteParticipant));
+      });
+
+    console.log('[Room] Connecting to', livekitUrl, '| room:', roomId);
+    room.connect(livekitUrl, livekitToken, { autoSubscribe: true }).catch((err: Error) => {
+      console.error('[Room] Connection failed:', err);
+      setConnState('error');
+      setErrorMsg(`Connection failed: ${err.message}`);
+    });
+
+    return () => {
+      console.log('[Room] Unmount — disconnecting');
+      room.disconnect();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // EMPTY DEPS — connect once on mount, disconnect on unmount
+
+  // ─── START RECORDING ──────────────────────────────────────────────────────
+  const startRecording = useCallback(async () => {
+    const room = roomRef.current;
+    if (!room) return;
+
+    try {
+      const localStream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 44100, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      localStreamRef.current = localStream;
+
+      const ctx = new AudioContext({ sampleRate: 44100 });
+      const localChunks: Float32Array[] = [];
+      const remoteChunks: Float32Array[] = [];
+      const bufSize = 4096;
+
+      // Local mic
+      const localSrc = ctx.createMediaStreamSource(localStream);
+      const localProc = ctx.createScriptProcessor(bufSize, 1, 1);
+      localProc.onaudioprocess = (e) => localChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      localSrc.connect(localProc);
+      localProc.connect(ctx.destination);
+
+      // Remote partner audio from LiveKit
+      let remoteProc: ScriptProcessorNode | undefined;
+      const remotes = Array.from(room.remoteParticipants.values());
+      if (remotes.length > 0) {
+        for (const pub of remotes[0].trackPublications.values()) {
+          if (pub.kind === Track.Kind.Audio && pub.track) {
+            const remoteSrc = ctx.createMediaStreamSource(new MediaStream([pub.track.mediaStreamTrack]));
+            remoteProc = ctx.createScriptProcessor(bufSize, 1, 1);
+            remoteProc.onaudioprocess = (e) => remoteChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+            remoteSrc.connect(remoteProc);
+            remoteProc.connect(ctx.destination);
+            break;
+          }
+        }
+      }
+
+      captureRef.current = { ctx, localChunks, remoteChunks, localProc, remoteProc, startTime: Date.now() };
+      setRecSeconds(0);
+      timerRef.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
+      setConnState('recording');
+      await acquireWakeLock();
+    } catch (err) {
+      alert('Could not start recording: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }, [acquireWakeLock]);
+
+  // ─── STOP RECORDING ───────────────────────────────────────────────────────
+  const stopRecording = useCallback(async () => {
+    const cap = captureRef.current;
+    if (!cap) return;
+
+    setConnState('stopping');
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    await releaseWakeLock();
+
+    cap.localProc.disconnect();
+    cap.remoteProc?.disconnect();
+    await cap.ctx.close();
+    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    localStreamRef.current = null;
+    captureRef.current = null;
+
+    const durationSec = Math.round((Date.now() - cap.startTime) / 1000);
+    const localWav = encodeWav(mergeChunks(cap.localChunks));
+    const remoteWav = cap.remoteChunks.length > 0
+      ? encodeWav(mergeChunks(cap.remoteChunks))
+      : new Blob([], { type: 'audio/wav' });
+
+    const fileName = buildFileName(session.myDeviceId, session.myLanguage, session.myGender, session.role, session.pairId);
+    const id = buildRecordingId(session.pairId, session.role);
+
+    await saveRecording({
+      id,
+      pairId: session.pairId,
+      deviceId: session.myDeviceId,
+      role: session.role,
+      language: session.myLanguage,
+      gender: session.myGender,
+      partnerName,
+      partnerGender: session.partnerGender,
+      durationSec,
+      createdAt: Date.now(),
+      fileName,
+      localBlob: localWav,
+      remoteBlob: remoteWav,
+    });
+
+    setRecCount((c) => c + 1);
+    setConnState('done');
+  }, [session, partnerName, releaseWakeLock]);
+
+  // ─── LEAVE WARNING ────────────────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (connState === 'recording') {
+        e.preventDefault();
+        return (e.returnValue = 'Recording is in progress. Are you sure you want to leave?');
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [connState]);
+
+  const fmtTime = (s: number) => `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  const sigLabel = { excellent: '● Excellent', good: '● Good', poor: '● Weak', unknown: '○ --' }[mySignal];
+  const sigColor = { excellent: 'text-green-600', good: 'text-blue-600', poor: 'text-yellow-600', unknown: 'text-slate-400' }[mySignal];
+
+  return (
+    <div className="min-h-screen bg-white flex flex-col">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 px-4 py-3">
+        <div className="max-w-lg mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="font-bold text-slate-900">Biswas Tech</h1>
+            <p className="text-xs text-slate-400">Room #{session.pairId} · {session.role}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className={`text-xs font-medium ${sigColor}`}>{sigLabel}</span>
+            <button onClick={() => {
+              if (connState === 'recording' && !confirm('Recording in progress. Leave?')) return;
+              roomRef.current?.disconnect();
+              router.replace('/home');
+            }} className="text-xs bg-slate-100 hover:bg-red-100 hover:text-red-700 text-slate-600 px-3 py-1.5 rounded-lg font-medium">
+              Leave
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 flex flex-col items-center justify-center p-4 max-w-lg mx-auto w-full gap-4">
+
+        {/* Connecting */}
+        {connState === 'connecting' && (
+          <div className="text-center">
+            <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="font-semibold text-slate-900">Connecting to room…</p>
+            <p className="text-slate-500 text-sm mt-1">Please allow microphone access</p>
+          </div>
+        )}
+
+        {/* Error */}
+        {(connState === 'error' || connState === 'disconnected') && (
+          <div className="text-center max-w-sm">
+            <div className="text-5xl mb-4">{connState === 'error' ? '⚠️' : '🔌'}</div>
+            <h2 className="font-bold text-slate-900 text-lg mb-2">{connState === 'error' ? 'Connection Failed' : 'Disconnected'}</h2>
+            <p className="text-slate-500 text-sm mb-4">{errorMsg}</p>
+            <button onClick={() => router.replace('/home')} className="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium">Go Home</button>
+          </div>
+        )}
+
+        {/* Room UI */}
+        {['waiting', 'ready', 'recording', 'stopping', 'done'].includes(connState) && (
+          <>
+            {/* Participant cards */}
+            <div className="grid grid-cols-2 gap-3 w-full">
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 text-center shadow-sm">
+                <div className={`w-16 h-16 rounded-full mx-auto mb-2 flex items-center justify-center text-3xl ${iAmSpeaking ? 'bg-green-100 speak-pulse ring-2 ring-green-400' : 'bg-slate-100'}`}>
+                  🎙️
+                </div>
+                <p className="text-xs text-slate-400">You</p>
+                <p className="font-bold text-slate-900 text-sm truncate">{session.myName}</p>
+                <p className="text-xs text-green-600 font-medium mt-0.5">● Connected</p>
+              </div>
+
+              <div className={`bg-white border rounded-2xl p-4 text-center shadow-sm ${partnerConnected ? 'border-slate-200' : 'border-dashed border-slate-300'}`}>
+                <div className={`w-16 h-16 rounded-full mx-auto mb-2 flex items-center justify-center text-3xl ${partnerSpeaking && partnerConnected ? 'bg-green-100 speak-pulse ring-2 ring-green-400' : 'bg-slate-100'}`}>
+                  {partnerConnected ? '🎙️' : '⏳'}
+                </div>
+                <p className="text-xs text-slate-400">Partner</p>
+                <p className="font-bold text-slate-900 text-sm truncate">{partnerName}</p>
+                <p className={`text-xs font-medium mt-0.5 ${partnerConnected ? 'text-green-600' : 'text-slate-400'}`}>
+                  {partnerConnected ? '● Connected' : 'Waiting…'}
+                </p>
+              </div>
+            </div>
+
+            {/* Status */}
+            {connState === 'waiting' && (
+              <div className="w-full bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
+                <p className="text-blue-800 font-medium text-sm">Waiting for partner to connect…</p>
+                <p className="text-blue-500 text-xs mt-1">Share the invite link with your partner</p>
+              </div>
+            )}
+
+            {connState === 'done' && (
+              <div className="w-full bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+                <p className="text-green-800 font-semibold">✅ Recording #{recCount} saved!</p>
+                <p className="text-green-600 text-xs mt-1">You can start another recording without reconnecting</p>
+              </div>
+            )}
+
+            {/* Timer */}
+            {connState === 'recording' && (
+              <div className="w-full bg-red-50 border border-red-200 rounded-2xl p-5 text-center">
+                <div className="flex items-center justify-center gap-2 mb-1">
+                  <span className="w-3 h-3 bg-red-500 rounded-full rec-blink" />
+                  <span className="text-red-600 font-semibold text-sm uppercase tracking-wide">Recording</span>
+                </div>
+                <p className="font-mono text-5xl font-bold text-slate-900 tracking-wider">{fmtTime(recSeconds)}</p>
+              </div>
+            )}
+
+            {connState === 'stopping' && (
+              <div className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
+                <div className="w-5 h-5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                <p className="text-slate-600 text-sm font-medium">Saving recording…</p>
+              </div>
+            )}
+
+            {/* Action button */}
+            {connState === 'ready' && (
+              <button onClick={startRecording}
+                className="w-full py-5 rounded-2xl bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xl transition-all shadow-md">
+                🔴 Start Recording
+              </button>
+            )}
+            {connState === 'recording' && (
+              <button onClick={stopRecording}
+                className="w-full py-5 rounded-2xl bg-slate-800 hover:bg-slate-900 active:scale-95 text-white font-bold text-xl transition-all shadow-md">
+                ⬛ Stop Recording
+              </button>
+            )}
+            {connState === 'done' && (
+              <button onClick={() => setConnState(partnerConnected ? 'ready' : 'waiting')}
+                className="w-full py-5 rounded-2xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-lg transition-all shadow-md">
+                🔴 Start New Recording
+              </button>
+            )}
+
+            <p className="text-center text-xs text-slate-400">
+              {session.myDeviceId} · {session.myLanguage} · {session.myGender}
+            </p>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}

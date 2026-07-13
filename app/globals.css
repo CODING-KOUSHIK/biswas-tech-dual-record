@@ -1,47 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
-
-:root {
-  --bg-base: #0A0F1E;
-  --bg-card: #1B2538;
-  --border: rgba(255, 255, 255, 0.1);
-}
 
 * {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
-html {
-  background-color: var(--bg-base);
-  color-scheme: dark;
-}
-
-body {
-  background-color: var(--bg-base);
-  color: #ffffff;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  min-height: 100dvh;
-}
-
-/* Prevent horizontal overflow */
-#__next, main {
-  overflow-x: hidden;
-}
-
-/* Remove tap highlight on mobile */
-* {
+html, body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #f8fafc;
+  color: #1e293b;
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
+/* Smooth transitions */
+* {
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
 }
-::-webkit-scrollbar-track {
-  background: transparent;
+
+/* Remove input autofill background */
+input:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px white inset;
 }
-::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.15);
-  border-radius: 3px;
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+
+/* Speaking pulse animation */
+@keyframes speakPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.15); opacity: 0.8; }
+}
+
+.speak-pulse {
+  animation: speakPulse 0.6s ease-in-out infinite;
+}
+
+/* Recording blink */
+@keyframes recBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.rec-blink {
+  animation: recBlink 1s ease-in-out infinite;
 }
