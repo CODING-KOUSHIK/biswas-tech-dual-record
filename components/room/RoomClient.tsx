@@ -1,20 +1,20 @@
 'use client';
 
 // components/room/RoomClient.tsx — Core LiveKit room component
-// Handles: connection, mic permission check, recording, data channel WAV
-// transfer, speaking detection, auto-reconnect, meaningful error messages.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Room,
   RoomEvent,
+  RoomOptions,
   Participant,
   RemoteParticipant,
   ConnectionQuality as LKConnectionQuality,
   Track,
   LocalParticipant,
   ConnectionState as LKConnectionState,
+  DisconnectReason,
 } from 'livekit-client';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { useWakeLock } from '@/hooks/useWakeLock';
@@ -34,7 +34,6 @@ import type {
   RecordingMetadata,
   DataChannelMessage,
   WavMetaMessage,
-  WavDoneMessage,
 } from '@/types';
 
 // ─── Types ────────────────────────────────────────────────────
@@ -50,27 +49,22 @@ interface UserInfo {
 interface RoomClientProps {
   roomId: string;
   livekitToken: string;
-  /** LiveKit WebSocket URL — resolved server-side, never from NEXT_PUBLIC env. */
   livekitUrl: string;
   userInfo: UserInfo;
 }
 
-type ConnectionState =
-  | 'checking-mic'    // verifying microphone permission
-  | 'mic-denied'      // microphone denied
-  | 'connecting'      // connecting to LiveKit
-  | 'connected'       // connected and ready
-  | 'reconnecting'    // auto-reconnecting
-  | 'disconnected'    // permanently disconnected
-  | 'error';          // non-recoverable error
-
-type ErrorKind =
+type UIState =
+  | 'checking-mic'
   | 'mic-denied'
-  | 'livekit-unavailable'
-  | 'network'
-  | 'invalid-room'
-  | 'token-expired'
-  | 'unknown';
+  | 'connecting'
+  | 'waiting'      // connected to LiveKit, waiting for partner
+  | 'ready'        // partner connected, ready to record
+  | 'recording'
+  | 'processing'
+  | 'done'
+  | 'reconnecting'
+  | 'disconnected'
+  | 'error';
 
 interface WavBuffer {
   meta: WavMetaMessage;
@@ -78,41 +72,17 @@ interface WavBuffer {
   totalChunks: number;
 }
 
-const CHUNK_SIZE = 15000; // bytes per data channel message
+const CHUNK_SIZE = 15000;
 
-// ─── Error message map ────────────────────────────────────────
+// ─── Mic permission ───────────────────────────────────────────
 
-function describeError(kind: ErrorKind): string {
-  switch (kind) {
-    case 'mic-denied':
-      return 'Microphone access was denied. Please allow microphone access in your browser settings and reload.';
-    case 'livekit-unavailable':
-      return 'Could not reach the LiveKit server. Check your internet connection or try again later.';
-    case 'network':
-      return 'Network connection lost. The app will try to reconnect automatically.';
-    case 'invalid-room':
-      return 'This room is invalid or no longer exists.';
-    case 'token-expired':
-      return 'Your session has expired. Please return to the dashboard and try again.';
-    default:
-      return 'An unexpected error occurred. Please reload the page.';
-  }
-}
-
-// ─── Mic permission check ─────────────────────────────────────
-
-async function checkMicrophonePermission(): Promise<'granted' | 'denied' | 'unavailable'> {
+async function checkMic(): Promise<boolean> {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    // Immediately stop — we just want to verify access
     stream.getTracks().forEach((t) => t.stop());
-    return 'granted';
-  } catch (err) {
-    const name = (err as DOMException)?.name ?? '';
-    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-      return 'denied';
-    }
-    return 'unavailable';
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -122,36 +92,26 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
   const router = useRouter();
   const { showToast } = useToast();
 
-  // Single tab enforcement
   useSingleTab();
 
-  // Connection / error state
-  const [connectionState, setConnectionState] = useState<ConnectionState>('checking-mic');
-  const [errorKind, setErrorKind] = useState<ErrorKind | null>(null);
-
-  // Room state
-  const [partnerConnected, setPartnerConnected] = useState(false);
-  const [partnerName, setPartnerName] = useState<string>('');
+  const [uiState, setUiState] = useState<UIState>('checking-mic');
+  const [errorMsg, setErrorMsg] = useState<string>('');
   const [quality, setQuality] = useState<ConnectionQuality>('unknown');
+  const [partnerConnected, setPartnerConnected] = useState(false);
+  const [partnerName, setPartnerName] = useState('');
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
   const [isRemoteSpeaking, setIsRemoteSpeaking] = useState(false);
-
-  // Recording state
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingDone, setRecordingDone] = useState(false);
-  const [pairId, setPairId] = useState<string>('');
-  const [guestDeviceId, setGuestDeviceId] = useState<string>('');
+  const [pairId, setPairId] = useState('');
+  const [guestDeviceId, setGuestDeviceId] = useState('');
   const [guestGender, setGuestGender] = useState<Gender>('MALE');
-  const [guestLanguage, setGuestLanguage] = useState<string>('EN');
+  const [guestLanguage, setGuestLanguage] = useState('EN');
   const [transferring, setTransferring] = useState(false);
 
-  // Refs
   const roomRef = useRef<Room | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const wavBufferRef = useRef<WavBuffer | null>(null);
-  const micGrantedRef = useRef(false);
+  const connectedOnce = useRef(false);
 
-  // Hooks
   const {
     state: recState,
     startRecording,
@@ -164,34 +124,30 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
     sampleRate: 44100,
   });
   const { requestWakeLock, releaseWakeLock } = useWakeLock();
-  useBeforeUnload(isRecording);
+  useBeforeUnload(uiState === 'recording');
 
-  // ─── Microphone permission check ─────────────────────────────
+  // ─── Step 1: Mic check ──────────────────────────────────────
 
   useEffect(() => {
-    let cancelled = false;
-
-    checkMicrophonePermission().then((result) => {
-      if (cancelled) return;
-      if (result === 'granted') {
-        micGrantedRef.current = true;
-        setConnectionState('connecting');
+    checkMic().then((ok) => {
+      if (ok) {
+        setUiState('connecting');
       } else {
-        setConnectionState('mic-denied');
-        setErrorKind('mic-denied');
+        setUiState('mic-denied');
+        setErrorMsg(
+          'Microphone access denied. Please allow microphone access in your browser settings and reload this page.'
+        );
       }
     });
-
-    return () => { cancelled = true; };
   }, []);
 
-  // ─── LiveKit connection (only after mic is confirmed) ─────────
+  // ─── Helpers ─────────────────────────────────────────────────
 
   const getRemoteStream = useCallback(() => {
     const room = roomRef.current;
     if (!room) return null;
-    for (const participant of room.remoteParticipants.values()) {
-      for (const pub of participant.trackPublications.values()) {
+    for (const p of room.remoteParticipants.values()) {
+      for (const pub of p.trackPublications.values()) {
         if (pub.track?.kind === Track.Kind.Audio && pub.track.mediaStream) {
           return pub.track.mediaStream;
         }
@@ -203,24 +159,18 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
   const sendData = useCallback((msg: DataChannelMessage) => {
     const room = roomRef.current;
     if (!room || room.state !== LKConnectionState.Connected) return;
-    const encoded = new TextEncoder().encode(JSON.stringify(msg));
-    room.localParticipant.publishData(encoded, { reliable: true });
+    room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(msg)), { reliable: true });
   }, []);
 
   const sendWavToPartner = useCallback(
-    async (wavBlob: Blob, meta: Omit<WavMetaMessage, 'type'>) => {
-      const arrayBuffer = await wavBlob.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
+    async (blob: Blob, meta: Omit<WavMetaMessage, 'type'>) => {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
       const totalChunks = Math.ceil(bytes.length / CHUNK_SIZE);
-
       sendData({ type: 'WAV_META', ...meta });
-
       for (let i = 0; i < totalChunks; i++) {
-        const chunk = bytes.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        sendData({ type: 'WAV_CHUNK', chunkIndex: i, totalChunks, data: Array.from(chunk) });
+        sendData({ type: 'WAV_CHUNK', chunkIndex: i, totalChunks, data: Array.from(bytes.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)) });
         if (i % 10 === 9) await new Promise((r) => setTimeout(r, 0));
       }
-
       sendData({ type: 'WAV_DONE', pairId: meta.pairId, totalChunks });
     },
     [sendData]
@@ -230,7 +180,6 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
     async (payload: Uint8Array) => {
       try {
         const msg: DataChannelMessage = JSON.parse(new TextDecoder().decode(payload));
-
         if (msg.type === 'PAIR_ID') {
           setPairId(msg.pairId);
         } else if (msg.type === 'GUEST_DEVICE_INFO') {
@@ -245,40 +194,35 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
           const buf = wavBufferRef.current;
           if (!buf) return;
           buf.totalChunks = msg.totalChunks;
-
           const parts: Uint8Array[] = [];
-          for (let i = 0; i < buf.totalChunks; i++) {
-            const c = buf.chunks.get(i);
-            if (c) parts.push(c);
-          }
-          const totalLength = parts.reduce((s, p) => s + p.length, 0);
-          const merged = new Uint8Array(totalLength);
-          let offset = 0;
-          for (const part of parts) { merged.set(part, offset); offset += part.length; }
-
-          const guestWavBlob = new Blob([merged], { type: 'audio/wav' });
+          for (let i = 0; i < buf.totalChunks; i++) { const c = buf.chunks.get(i); if (c) parts.push(c); }
+          const merged = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+          let off = 0; for (const p of parts) { merged.set(p, off); off += p.length; }
           try {
-            await updateRecordingWithRemote(msg.pairId, guestWavBlob);
+            await updateRecordingWithRemote(msg.pairId, new Blob([merged], { type: 'audio/wav' }));
             showToast('Partner recording received ✓', 'success');
-          } catch (err) {
-            console.error('Failed to store guest WAV:', err);
-          }
+          } catch (e) { console.error('Failed to store guest WAV:', e); }
           wavBufferRef.current = null;
           setTransferring(false);
         }
-      } catch {
-        // Ignore malformed messages
-      }
+      } catch { /* ignore malformed */ }
     },
     [showToast]
   );
 
-  // ─── Connect to LiveKit room ──────────────────────────────────
+  // ─── Step 2: Connect to LiveKit ──────────────────────────────
 
   useEffect(() => {
-    if (connectionState !== 'connecting') return;
+    if (uiState !== 'connecting') return;
 
-    const room = new Room({
+    // Validate inputs before attempting connection
+    if (!livekitUrl || !livekitToken) {
+      setUiState('error');
+      setErrorMsg('LiveKit configuration is missing. Check LIVEKIT_URL is set in Vercel environment variables.');
+      return;
+    }
+
+    const options: RoomOptions = {
       adaptiveStream: true,
       dynacast: true,
       audioCaptureDefaults: {
@@ -287,137 +231,139 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
         autoGainControl: false,
         sampleRate: 44100,
       },
-    });
-    roomRef.current = room;
-
-    const updatePartnerState = () => {
-      const partners = Array.from(room.remoteParticipants.values()) as RemoteParticipant[];
-      setPartnerConnected(partners.length > 0);
-      if (partners.length > 0) setPartnerName(partners[0].identity ?? 'Partner');
-      else setPartnerName('');
     };
 
-    const mapQuality = (q: LKConnectionQuality): ConnectionQuality => {
-      switch (q) {
-        case LKConnectionQuality.Excellent: return 'excellent';
-        case LKConnectionQuality.Good: return 'good';
-        case LKConnectionQuality.Poor: return 'poor';
-        default: return 'unknown';
+    const room = new Room(options);
+    roomRef.current = room;
+
+    const updatePartners = () => {
+      const partners = Array.from(room.remoteParticipants.values());
+      const hasPartner = partners.length > 0;
+      setPartnerConnected(hasPartner);
+      if (hasPartner) setPartnerName(partners[0].identity ?? 'Partner');
+      else setPartnerName('');
+      // Update UI state based on partner presence
+      if (connectedOnce.current) {
+        setUiState(hasPartner ? 'ready' : 'waiting');
       }
     };
 
     room
       .on(RoomEvent.Connected, () => {
-        setConnectionState('connected');
-        setErrorKind(null);
+        connectedOnce.current = true;
+        setUiState('waiting'); // connected but no partner yet
+        setErrorMsg('');
         if (userInfo.role === 'host') {
           const newPairId = String(Math.floor(10000 + Math.random() * 90000));
           setPairId(newPairId);
           sendData({ type: 'PAIR_ID', pairId: newPairId, roomId });
         } else {
-          sendData({
-            type: 'GUEST_DEVICE_INFO',
-            deviceId: userInfo.deviceId,
-            gender: userInfo.gender,
-            language: userInfo.language,
-          });
+          sendData({ type: 'GUEST_DEVICE_INFO', deviceId: userInfo.deviceId, gender: userInfo.gender, language: userInfo.language });
         }
+        // Check if partner already in room
+        updatePartners();
       })
       .on(RoomEvent.Reconnecting, () => {
-        setConnectionState('reconnecting');
+        setUiState('reconnecting');
         showToast('Connection lost — reconnecting…', 'warning', 5000);
       })
       .on(RoomEvent.Reconnected, () => {
-        setConnectionState('connected');
+        setUiState(partnerConnected ? 'ready' : 'waiting');
         showToast('Reconnected ✓', 'success', 2000);
       })
-      .on(RoomEvent.Disconnected, (reason) => {
-        const reasonStr = reason ? String(reason) : '';
-        if (reasonStr.includes('token') || reasonStr.includes('401')) {
-          setErrorKind('token-expired');
-        } else if (reasonStr.includes('room') || reasonStr.includes('404')) {
-          setErrorKind('invalid-room');
-        } else {
-          setErrorKind('network');
+      .on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+        const r = reason ?? 0;
+        if (r === DisconnectReason.DUPLICATE_IDENTITY || r === DisconnectReason.CLIENT_INITIATED) {
+          return; // intentional disconnect, don't show error
         }
-        setConnectionState('disconnected');
+        setUiState('disconnected');
+        if (r === DisconnectReason.PARTICIPANT_REMOVED || r === DisconnectReason.USER_REJECTED) {
+          setErrorMsg('Access denied. Your token may have expired. Return to dashboard and try again.');
+        } else if (r === DisconnectReason.ROOM_DELETED || r === DisconnectReason.ROOM_CLOSED) {
+          setErrorMsg('The room was closed.');
+        } else if (r === DisconnectReason.JOIN_FAILURE) {
+          setErrorMsg('Failed to join room. Check your LiveKit credentials in Vercel environment variables.');
+        } else {
+          setErrorMsg('Disconnected from the room. Check your internet connection.');
+        }
       })
-      .on(RoomEvent.ParticipantConnected, updatePartnerState)
-      .on(RoomEvent.ParticipantDisconnected, updatePartnerState)
+      .on(RoomEvent.ParticipantConnected, () => {
+        updatePartners();
+        showToast('Partner connected!', 'success', 2000);
+      })
+      .on(RoomEvent.ParticipantDisconnected, () => {
+        updatePartners();
+        showToast('Partner disconnected', 'warning', 3000);
+      })
       .on(RoomEvent.ConnectionQualityChanged, (q: LKConnectionQuality, p: Participant) => {
-        if (p instanceof LocalParticipant) setQuality(mapQuality(q));
+        if (p instanceof LocalParticipant) {
+          setQuality(q === LKConnectionQuality.Excellent ? 'excellent' : q === LKConnectionQuality.Good ? 'good' : 'poor');
+        }
       })
       .on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
         setIsLocalSpeaking(speakers.some((s) => s instanceof LocalParticipant));
         setIsRemoteSpeaking(speakers.some((s) => s instanceof RemoteParticipant));
       })
-      .on(RoomEvent.DataReceived, (payload: Uint8Array) => {
-        handleDataReceived(payload);
-      })
-      .on(RoomEvent.TrackSubscribed, () => {
-        remoteStreamRef.current = getRemoteStream();
-      });
+      .on(RoomEvent.DataReceived, (payload: Uint8Array) => handleDataReceived(payload))
+      .on(RoomEvent.TrackSubscribed, () => { remoteStreamRef.current = getRemoteStream(); });
 
-    // Connect with auto-reconnect enabled (LiveKit client handles retries internally)
+    console.log('[RoomClient] Connecting to', livekitUrl);
     room.connect(livekitUrl, livekitToken, { autoSubscribe: true }).catch((err: unknown) => {
-      console.error('LiveKit connect error:', err);
-      const msg = err instanceof Error ? err.message : '';
-      if (msg.includes('network') || msg.includes('WebSocket') || msg.includes('ECONNREFUSED')) {
-        setErrorKind('livekit-unavailable');
-      } else if (msg.includes('token') || msg.includes('401')) {
-        setErrorKind('token-expired');
-      } else if (msg.includes('room') || msg.includes('404')) {
-        setErrorKind('invalid-room');
+      console.error('[RoomClient] Connection failed:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setUiState('error');
+      if (msg.includes('403') || msg.includes('not allowed') || msg.includes('unauthorized')) {
+        setErrorMsg('Token rejected by LiveKit. Verify LIVEKIT_API_KEY and LIVEKIT_API_SECRET are correct in Vercel.');
+      } else if (msg.includes('404') || msg.includes('room')) {
+        setErrorMsg('Room not found. Return to dashboard and create a new room.');
+      } else if (msg.includes('websocket') || msg.includes('WebSocket') || msg.includes('network') || msg.includes('ECONNREFUSED')) {
+        setErrorMsg('Cannot reach LiveKit server. Check LIVEKIT_URL in Vercel environment variables.');
       } else {
-        setErrorKind('unknown');
+        setErrorMsg(`Connection failed: ${msg || 'Unknown error'}. Check Vercel logs for details.`);
       }
-      setConnectionState('error');
-      showToast('Failed to connect to room', 'error');
     });
 
     return () => {
       room.disconnect();
       roomRef.current = null;
+      connectedOnce.current = false;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionState === 'connecting', livekitToken, livekitUrl]);
+    // Only re-run if the token or URL changes (not on every state change)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livekitToken, livekitUrl, uiState === 'connecting']);
 
-  // ─── Recording handlers ───────────────────────────────────────
+  // ─── Recording ───────────────────────────────────────────────
 
   const handleStartRecording = useCallback(async () => {
     await requestWakeLock();
     const remoteStream = remoteStreamRef.current ?? getRemoteStream();
     await startRecording(remoteStream);
-    setIsRecording(true);
-    setRecordingDone(false);
+    setUiState('recording');
     sendData({ type: 'RECORDING_START' });
   }, [requestWakeLock, startRecording, sendData, getRemoteStream]);
 
   const handleStopRecording = useCallback(async () => {
-    setIsRecording(false);
+    setUiState('processing');
     sendData({ type: 'RECORDING_STOP' });
-
     try {
       const result = await stopRecording();
       await releaseWakeLock();
 
       const currentPairId = pairId || String(Math.floor(10000 + Math.random() * 90000));
-
       const hostDeviceId = userInfo.role === 'host' ? userInfo.deviceId : guestDeviceId;
       const actualGuestDeviceId = userInfo.role === 'guest' ? userInfo.deviceId : guestDeviceId;
+
       const hostFilename = buildFilename(
         hostDeviceId,
         userInfo.role === 'host' ? userInfo.language : guestLanguage,
         userInfo.role === 'host' ? userInfo.gender : guestGender,
-        'HOST',
-        currentPairId
+        'HOST', currentPairId
       );
       const guestFilename = buildFilename(
         actualGuestDeviceId,
         userInfo.role === 'guest' ? userInfo.language : guestLanguage,
         userInfo.role === 'guest' ? userInfo.gender : guestGender,
-        'GUEST',
-        currentPairId
+        'GUEST', currentPairId
       );
 
       const metadata: RecordingMetadata = {
@@ -433,98 +379,84 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
         hasGuestRecording: userInfo.role !== 'host',
       };
 
-      await saveRecording(
-        metadata,
-        result.localBlob,
-        userInfo.role === 'host' ? null : result.remoteBlob
-      );
+      await saveRecording(metadata, result.localBlob, userInfo.role === 'host' ? null : result.remoteBlob);
 
       if (userInfo.role === 'guest') {
         setTransferring(true);
-        const guestMeta: Omit<WavMetaMessage, 'type'> = {
+        await sendWavToPartner(result.localBlob, {
           pairId: currentPairId,
           deviceId: userInfo.deviceId,
           gender: userInfo.gender,
           language: userInfo.language,
           durationMs: result.durationMs,
           filename: guestFilename,
-        };
-        await sendWavToPartner(result.localBlob, guestMeta);
+        });
       }
 
-      setRecordingDone(true);
-      showToast('Recording saved successfully', 'success');
+      setUiState('done');
+      showToast('Recording saved ✓', 'success');
     } catch (err) {
       showToast('Recording failed to save', 'error');
       console.error(err);
+      setUiState('ready');
     }
-  }, [
-    stopRecording,
-    releaseWakeLock,
-    pairId,
-    userInfo,
-    guestDeviceId,
-    guestGender,
-    guestLanguage,
-    sendData,
-    sendWavToPartner,
-    showToast,
-  ]);
+  }, [stopRecording, releaseWakeLock, pairId, userInfo, guestDeviceId, guestGender, guestLanguage, sendData, sendWavToPartner, showToast]);
 
   const handleLeave = useCallback(async () => {
-    if (isRecording) await handleStopRecording();
+    if (uiState === 'recording') await handleStopRecording();
     roomRef.current?.disconnect();
     router.push(userInfo.role === 'host' ? '/dashboard' : '/');
-  }, [isRecording, handleStopRecording, router, userInfo.role]);
+  }, [uiState, handleStopRecording, router, userInfo.role]);
 
-  // ─── Error / special states ───────────────────────────────────
+  // ─── Render ──────────────────────────────────────────────────
 
-  if (connectionState === 'checking-mic') {
+  if (uiState === 'checking-mic') {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center">
         <div className="text-3xl mb-3">🎙️</div>
-        <p className="text-white font-medium mb-1">Checking microphone access…</p>
-        <p className="text-gray-400 text-sm">Please allow microphone access if prompted.</p>
+        <p className="text-white font-medium mb-1">Checking microphone…</p>
+        <p className="text-gray-500 text-sm">Please allow microphone access if prompted.</p>
       </div>
     );
   }
 
-  if (connectionState === 'mic-denied' || connectionState === 'error') {
-    const kind = errorKind ?? (connectionState === 'mic-denied' ? 'mic-denied' : 'unknown');
+  if (uiState === 'connecting') {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center max-w-sm mx-auto">
-        <div className="text-4xl mb-4">{kind === 'mic-denied' ? '🎙️' : '⚠️'}</div>
+      <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center">
+        <div className="animate-spin text-3xl mb-3">⏳</div>
+        <p className="text-white font-medium mb-1">Connecting to room…</p>
+        <p className="text-gray-500 text-sm">Establishing LiveKit connection</p>
+      </div>
+    );
+  }
+
+  if (uiState === 'mic-denied' || uiState === 'error') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center max-w-md mx-auto">
+        <div className="text-4xl mb-4">{uiState === 'mic-denied' ? '🎙️' : '⚠️'}</div>
         <h1 className="text-lg font-bold text-white mb-3">
-          {kind === 'mic-denied' ? 'Microphone Access Denied' : 'Connection Error'}
+          {uiState === 'mic-denied' ? 'Microphone Access Denied' : 'Connection Error'}
         </h1>
-        <p className="text-gray-400 text-sm mb-6">{describeError(kind)}</p>
-        <Button
-          onClick={() => router.push(userInfo.role === 'host' ? '/dashboard' : '/')}
-          variant="ghost"
-        >
+        <p className="text-gray-400 text-sm mb-6 leading-relaxed">{errorMsg}</p>
+        <Button onClick={() => router.push(userInfo.role === 'host' ? '/dashboard' : '/')} variant="ghost">
           Return Home
         </Button>
       </div>
     );
   }
 
-  if (connectionState === 'disconnected') {
-    const kind = errorKind ?? 'network';
+  if (uiState === 'disconnected') {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center max-w-sm mx-auto">
+      <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center max-w-md mx-auto">
         <div className="text-4xl mb-4">📡</div>
         <h1 className="text-lg font-bold text-white mb-3">Disconnected</h1>
-        <p className="text-gray-400 text-sm mb-6">{describeError(kind)}</p>
-        <Button
-          onClick={() => router.push(userInfo.role === 'host' ? '/dashboard' : '/')}
-        >
+        <p className="text-gray-400 text-sm mb-6 leading-relaxed">{errorMsg}</p>
+        <Button onClick={() => router.push(userInfo.role === 'host' ? '/dashboard' : '/')}>
           Return Home
         </Button>
       </div>
     );
   }
-
-  const canRecord = partnerConnected && connectionState === 'connected';
 
   return (
     <div className="min-h-screen bg-[#0A0F1E] flex flex-col">
@@ -536,113 +468,96 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
         </div>
         <div className="flex items-center gap-3">
           <SignalStrength quality={quality} />
-          {connectionState === 'reconnecting' && (
+          {uiState === 'reconnecting' && (
             <span className="text-xs text-amber-400 animate-pulse">Reconnecting…</span>
-          )}
-          {connectionState === 'connecting' && (
-            <span className="text-xs text-blue-400 animate-pulse">Connecting…</span>
           )}
         </div>
       </header>
 
       {/* Main */}
-      <main className="flex-1 flex flex-col gap-5 p-4 max-w-lg mx-auto w-full">
+      <main className="flex-1 flex flex-col gap-4 p-4 max-w-lg mx-auto w-full">
 
+        {/* Partner status */}
         <ParticipantStatus
           role={userInfo.role}
           partnerConnected={partnerConnected}
           partnerName={partnerName}
         />
 
-        <div className="bg-white/5 border border-white/10 rounded-lg p-4 space-y-3">
-          <SpeakingIndicator label="You" isSpeaking={isLocalSpeaking} color="green" />
-          <div className="border-t border-white/5" />
-          <SpeakingIndicator label="Partner" isSpeaking={isRemoteSpeaking} color="blue" />
-        </div>
-
-        {(isRecording || recState === 'processing') && (
-          <div className="bg-red-600/10 border border-red-600/30 rounded-lg p-4 flex items-center justify-between">
-            <RecordingTimer isRunning={isRecording} />
-            <span className="text-xs text-red-400">
-              {recState === 'processing' ? 'Saving…' : 'Recording'}
-            </span>
+        {/* Waiting for partner */}
+        {!partnerConnected && (
+          <div className="bg-white/5 border border-white/10 rounded-lg p-5 text-center">
+            <div className="text-2xl mb-2 animate-pulse">⏳</div>
+            <p className="text-white font-medium text-sm mb-1">Waiting for partner to connect…</p>
+            <p className="text-gray-500 text-xs">
+              {userInfo.role === 'host'
+                ? 'Share the invite link with your partner. Recording will be enabled once they join.'
+                : 'The host will start the session shortly.'}
+            </p>
           </div>
         )}
 
+        {/* Speaking indicators — only when partner is connected */}
+        {partnerConnected && (
+          <div className="bg-white/5 border border-white/10 rounded-lg p-4 space-y-3">
+            <SpeakingIndicator label="You" isSpeaking={isLocalSpeaking} color="green" />
+            <div className="border-t border-white/5" />
+            <SpeakingIndicator label="Partner" isSpeaking={isRemoteSpeaking} color="blue" />
+          </div>
+        )}
+
+        {/* Recording status */}
+        {uiState === 'recording' && (
+          <div className="bg-red-600/10 border border-red-600/30 rounded-lg p-4 flex items-center justify-between">
+            <RecordingTimer isRunning={true} />
+            <span className="text-xs text-red-400">Recording</span>
+          </div>
+        )}
+        {uiState === 'processing' && (
+          <div className="bg-amber-600/10 border border-amber-600/30 rounded-lg p-4 text-center text-xs text-amber-400">
+            Saving recording…
+          </div>
+        )}
+
+        {/* WAV transfer */}
         {transferring && (
           <div className="bg-blue-600/10 border border-blue-500/30 rounded-lg p-3 text-xs text-blue-400 text-center">
             Sending recording to partner…
           </div>
         )}
 
-        {!partnerConnected && connectionState === 'connected' && (
-          <div className="text-center py-6 text-gray-500 text-sm">
-            Waiting for partner to connect…
-          </div>
-        )}
-
-        {/* LiveKit not yet connected notice */}
-        {connectionState === 'connecting' && (
-          <div className="text-center py-6 text-gray-500 text-sm">
-            Connecting to room…
-          </div>
-        )}
-
-        {canRecord && !isRecording && !recordingDone && (
-          <Button
-            id="btn-start-recording"
-            size="lg"
-            variant="success"
-            onClick={handleStartRecording}
-            disabled={recState === 'processing'}
-            className="w-full"
-          >
+        {/* Controls */}
+        {uiState === 'ready' && (
+          <Button id="btn-start-recording" size="lg" variant="success" onClick={handleStartRecording} className="w-full">
             ● Start Recording
           </Button>
         )}
-
-        {isRecording && (
-          <Button
-            id="btn-stop-recording"
-            size="lg"
-            variant="danger"
-            onClick={handleStopRecording}
-            disabled={recState === 'processing'}
-            className="w-full"
-          >
+        {uiState === 'recording' && (
+          <Button id="btn-stop-recording" size="lg" variant="danger" onClick={handleStopRecording} className="w-full">
             ■ Stop Recording
           </Button>
         )}
-
-        {recordingDone && (
+        {uiState === 'done' && (
           <Button
             id="btn-new-recording"
             size="lg"
             variant="primary"
-            onClick={() => {
-              resetRecorder();
-              setRecordingDone(false);
-              setPairId('');
-            }}
+            onClick={() => { resetRecorder(); setUiState('ready'); setPairId(''); }}
             className="w-full"
           >
             + Start New Recording
           </Button>
         )}
 
+        {/* Device info */}
         <div className="text-xs text-gray-600 text-center">
           {userInfo.deviceId} · {userInfo.language} · {userInfo.gender}
         </div>
       </main>
 
+      {/* Footer */}
       <footer className="p-4 border-t border-white/10">
-        <Button
-          id="btn-leave"
-          variant="ghost"
-          size="md"
-          onClick={handleLeave}
-          className="w-full"
-        >
+        <Button id="btn-leave" variant="ghost" size="md" onClick={handleLeave} className="w-full">
           Leave Room
         </Button>
       </footer>

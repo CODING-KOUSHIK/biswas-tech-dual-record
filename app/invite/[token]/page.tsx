@@ -43,13 +43,12 @@ export default async function InvitePage({ params }: Props) {
     );
   }
 
+  // Render directly — InviteJoin handles full-screen room layout
   return (
-    <div className="min-h-screen bg-[#0A0F1E] flex items-center justify-center p-4">
-      <InviteJoin
-        token={token}
-        roomId={invite.roomId}
-        partnerGender={invite.partnerGender}
-      />
-    </div>
+    <InviteJoin
+      token={token}
+      roomId={invite.roomId}
+      partnerGender={invite.partnerGender}
+    />
   );
 }
