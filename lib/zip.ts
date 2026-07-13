@@ -5,22 +5,25 @@ import { RecordingRecord } from './db';
 
 export async function downloadRecordingPair(record: RecordingRecord): Promise<void> {
   const zip = new JSZip();
-  const folder = zip.folder(`Meeting_${record.pairId}`)!;
+  const f = zip.folder(`Meeting_${record.pairId}`)!;
 
-  folder.file(record.fileName, record.localBlob);
-  folder.file(record.fileName.replace('_HOST_', '_REMOTE_HOST_').replace('_GUEST_', '_REMOTE_GUEST_'), record.remoteBlob);
-
-  // Determine host/guest filenames
-  const role = record.role;
   const localName = record.fileName;
-  const remoteSuffix = role === 'HOST' ? 'GUEST' : 'HOST';
-  const remoteFileName = `PARTNER_${remoteSuffix}_${record.pairId}.wav`;
 
-  const folder2 = new JSZip().folder(`Meeting_${record.pairId}`)!;
-  const zip2 = new JSZip();
-  const f = zip2.folder(`Meeting_${record.pairId}`)!;
+  // Extract sequence values from local fileName (e.g. PAIR001 - 001)
+  const match = record.fileName.match(/_PAIR(\d+)\s*-\s*(\d+)\(/);
+  const pairPadded = match ? match[1] : '001';
+  const recPadded = match ? match[2] : '001';
+
+  const remoteRole = record.role === 'HOST' ? 'guest' : 'host';
+  const remoteDeviceId = (record as any).partnerDeviceId ? (record as any).partnerDeviceId.toLowerCase() : 'unknown';
+  const remoteGender = record.partnerGender.toLowerCase();
+  const remoteLanguage = record.language.toLowerCase();
+  const remoteSpeakerName = record.partnerName.trim().replace(/\s+/g, '_');
+
+  const remoteName = `${remoteLanguage}_${remoteRole}_${remoteDeviceId}_${remoteGender}_PAIR${pairPadded} - ${recPadded}(${remoteSpeakerName}).wav`;
+
   f.file(localName, record.localBlob);
-  f.file(remoteFileName, record.remoteBlob);
+  f.file(remoteName, record.remoteBlob);
 
   const metadata = {
     pairId: record.pairId,
@@ -32,13 +35,11 @@ export async function downloadRecordingPair(record: RecordingRecord): Promise<vo
     gender: record.gender,
     partnerName: record.partnerName,
     partnerGender: record.partnerGender,
-    files: [localName, remoteFileName],
+    files: [localName, remoteName],
   };
   f.file('metadata.json', JSON.stringify(metadata, null, 2));
 
-  void folder; void folder2; // suppress unused warnings
-
-  const blob = await zip2.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
   triggerDownload(blob, `Meeting_${record.pairId}.zip`);
 }
 
@@ -47,9 +48,23 @@ export async function downloadAllRecordings(records: RecordingRecord[]): Promise
 
   for (const record of records) {
     const folder = zip.folder(`Meeting_${record.pairId}`)!;
-    folder.file(record.fileName, record.localBlob);
-    const remoteSuffix = record.role === 'HOST' ? 'GUEST' : 'HOST';
-    folder.file(`PARTNER_${remoteSuffix}_${record.pairId}.wav`, record.remoteBlob);
+    
+    const localName = record.fileName;
+
+    const match = record.fileName.match(/_PAIR(\d+)\s*-\s*(\d+)\(/);
+    const pairPadded = match ? match[1] : '001';
+    const recPadded = match ? match[2] : '001';
+
+    const remoteRole = record.role === 'HOST' ? 'guest' : 'host';
+    const remoteDeviceId = (record as any).partnerDeviceId ? (record as any).partnerDeviceId.toLowerCase() : 'unknown';
+    const remoteGender = record.partnerGender.toLowerCase();
+    const remoteLanguage = record.language.toLowerCase();
+    const remoteSpeakerName = record.partnerName.trim().replace(/\s+/g, '_');
+
+    const remoteName = `${remoteLanguage}_${remoteRole}_${remoteDeviceId}_${remoteGender}_PAIR${pairPadded} - ${recPadded}(${remoteSpeakerName}).wav`;
+
+    folder.file(localName, record.localBlob);
+    folder.file(remoteName, record.remoteBlob);
 
     const metadata = {
       pairId: record.pairId,

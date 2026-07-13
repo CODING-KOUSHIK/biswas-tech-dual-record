@@ -1,6 +1,6 @@
 'use client';
 // components/room/RecordingRoom.tsx
-// Core room component with audio transfer & Host/Guest sync controls
+// Core room component with audio loopback silencing & Host/Guest sync controls
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -17,7 +17,7 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, mergeChunks } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName } from '@/lib/db';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence } from '@/lib/db';
 import { useWakeLock } from '@/hooks/useWakeLock';
 
 interface Session {
@@ -58,14 +58,20 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const captureRef = useRef<AudioCapture | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const connectedRef = useRef(false);
+  const partnerDeviceIdRef = useRef<string>('unknown');
 
   const [connState, setConnState] = useState<ConnState>('connecting');
   const [errorMsg, setErrorMsg] = useState('');
   const [partnerConnected, setPartnerConnected] = useState(false);
   const [partnerName, setPartnerName] = useState(session.partnerName);
   const [mySignal, setMySignal] = useState<Signal>('unknown');
+
+  // Debounced speak state variables
   const [iAmSpeaking, setIAmSpeaking] = useState(false);
   const [partnerSpeaking, setPartnerSpeaking] = useState(false);
+  const localSpeechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const partnerSpeechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [recSeconds, setRecSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [recCount, setRecCount] = useState(0);
@@ -104,12 +110,17 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       const remoteChunks: Float32Array[] = [];
       const bufSize = 4096;
 
+      // CRITICAL FIX: Connect script processors to a silent gain node to prevent speaker feedback loop
+      const silence = ctx.createGain();
+      silence.gain.value = 0;
+      silence.connect(ctx.destination);
+
       // Local mic
       const localSrc = ctx.createMediaStreamSource(localStream);
       const localProc = ctx.createScriptProcessor(bufSize, 1, 1);
       localProc.onaudioprocess = (e) => localChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
       localSrc.connect(localProc);
-      localProc.connect(ctx.destination);
+      localProc.connect(silence);
 
       // Remote partner audio from LiveKit
       let remoteProc: ScriptProcessorNode | undefined;
@@ -121,7 +132,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
             remoteProc = ctx.createScriptProcessor(bufSize, 1, 1);
             remoteProc.onaudioprocess = (e) => remoteChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
             remoteSrc.connect(remoteProc);
-            remoteProc.connect(ctx.destination);
+            remoteProc.connect(silence);
             break;
           }
         }
@@ -164,7 +175,9 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       ? encodeWav(mergeChunks(cap.remoteChunks))
       : new Blob([], { type: 'audio/wav' });
 
-    const fileName = buildFileName(session.myDeviceId, session.myLanguage, session.myGender, session.role, session.pairId);
+    // Calculate dynamic sequence naming and build output filenames
+    const { pairSeq, recSeq } = await getRecordingSequence(session.pairId);
+    const fileName = buildFileName(session.myDeviceId, session.myLanguage, session.myGender, session.role, pairSeq, recSeq, session.myName);
     const id = buildRecordingId(session.pairId, session.role);
 
     await saveRecording({
@@ -176,6 +189,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       gender: session.myGender,
       partnerName,
       partnerGender: session.partnerGender,
+      partnerDeviceId: partnerDeviceIdRef.current,
       durationSec,
       createdAt: Date.now(),
       fileName,
@@ -192,7 +206,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     }
   }, [session, partnerName, releaseWakeLock, sendData]);
 
-  // Sync callbacks up to date
+  // Keep callback refs updated to prevent stale closures
   useEffect(() => {
     startRecordingRef.current = startRecording;
     stopRecordingRef.current = stopRecording;
@@ -227,6 +241,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
         const parts = p.identity.split('_');
         const remoteDeviceId = parts[0];
         const remoteRole = parts[1];
+        partnerDeviceIdRef.current = remoteDeviceId;
 
         // Host device binding validation
         if (session.role === 'HOST' && remoteRole === 'GUEST') {
@@ -283,11 +298,43 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
         }
       })
       .on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
-        setIAmSpeaking(speakers.some((s) => s instanceof LocalParticipant));
-        setPartnerSpeaking(speakers.some((s) => s instanceof RemoteParticipant));
+        const isLocalActive = speakers.some((s) => s instanceof LocalParticipant);
+        const isRemoteActive = speakers.some((s) => s instanceof RemoteParticipant);
+
+        // --- Local Indicator (Debounced by 10s silent window) ---
+        if (isLocalActive) {
+          if (localSpeechTimeoutRef.current) {
+            clearTimeout(localSpeechTimeoutRef.current);
+            localSpeechTimeoutRef.current = null;
+          }
+          setIAmSpeaking(true);
+        } else {
+          if (!localSpeechTimeoutRef.current) {
+            localSpeechTimeoutRef.current = setTimeout(() => {
+              setIAmSpeaking(false);
+              localSpeechTimeoutRef.current = null;
+            }, 10000);
+          }
+        }
+
+        // --- Partner Indicator (Debounced by 10s silent window) ---
+        if (isRemoteActive) {
+          if (partnerSpeechTimeoutRef.current) {
+            clearTimeout(partnerSpeechTimeoutRef.current);
+            partnerSpeechTimeoutRef.current = null;
+          }
+          setPartnerSpeaking(true);
+        } else {
+          if (!partnerSpeechTimeoutRef.current) {
+            partnerSpeechTimeoutRef.current = setTimeout(() => {
+              setPartnerSpeaking(false);
+              partnerSpeechTimeoutRef.current = null;
+            }, 10000);
+          }
+        }
       })
       .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
-        // PLAY incoming remote audio tracks
+        // PLAY incoming remote audio tracks in browser speakers
         if (track.kind === Track.Kind.Audio) {
           const element = track.attach();
           document.body.appendChild(element);
@@ -339,6 +386,8 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       room.disconnect();
       // Remove any leftover audio tags
       document.querySelectorAll('audio').forEach((el) => el.remove());
+      if (localSpeechTimeoutRef.current) clearTimeout(localSpeechTimeoutRef.current);
+      if (partnerSpeechTimeoutRef.current) clearTimeout(partnerSpeechTimeoutRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -444,8 +493,10 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
             {connState === 'done' && (
               <div className="w-full bg-green-50 border border-green-200 rounded-xl p-4 text-center">
                 <p className="text-green-800 font-semibold">✅ Recording #{recCount} saved!</p>
-                {session.role === 'GUEST' && (
+                {session.role === 'GUEST' ? (
                   <p className="text-green-600 text-xs mt-1">Waiting for host to start new recording…</p>
+                ) : (
+                  <p className="text-green-600 text-xs mt-1">You can start another recording without reconnecting</p>
                 )}
               </div>
             )}
