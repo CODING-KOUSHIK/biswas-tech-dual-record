@@ -1,7 +1,7 @@
 'use client';
 // app/home/page.tsx — Main home page with 3 cards
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { loadProfile, clearProfile } from '@/lib/profile';
 import { getDeviceId } from '@/lib/device';
@@ -45,6 +45,9 @@ export default function HomePage() {
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
 
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const localAudioPlayRef = useRef<HTMLAudioElement | null>(null);
+
   useEffect(() => {
     const p = loadProfile();
     if (!p) { router.replace('/setup'); return; }
@@ -59,6 +62,12 @@ export default function HomePage() {
       .catch((err) => {
         alert("Microphone permission is required to use this application. Please allow microphone access in your browser settings to continue.");
       });
+
+    return () => {
+      if (localAudioPlayRef.current) {
+        localAudioPlayRef.current.pause();
+      }
+    };
   }, [router]);
 
   // Load recordings when switching to that view
@@ -71,6 +80,25 @@ export default function HomePage() {
       });
     }
   }, [view]);
+
+  const handlePlayVoice = (rec: RecordingRecord) => {
+    if (playingVoiceId === rec.id) {
+      if (localAudioPlayRef.current) {
+        localAudioPlayRef.current.pause();
+      }
+      setPlayingVoiceId(null);
+    } else {
+      if (localAudioPlayRef.current) {
+        localAudioPlayRef.current.pause();
+      }
+      const url = URL.createObjectURL(rec.localBlob);
+      const audio = new Audio(url);
+      localAudioPlayRef.current = audio;
+      audio.onended = () => setPlayingVoiceId(null);
+      audio.play().catch((err) => console.error("Playback failed", err));
+      setPlayingVoiceId(rec.id);
+    }
+  };
 
   const downloadSingleBlob = (blob: Blob, fileName: string) => {
     const url = URL.createObjectURL(blob);
@@ -422,6 +450,10 @@ export default function HomePage() {
                     <p className="text-xs text-slate-400 mt-1.5">Partner: {rec.partnerName} ({rec.partnerGender})</p>
                   </div>
                   <div className="flex flex-col gap-1.5 shrink-0 w-28">
+                    <button onClick={() => handlePlayVoice(rec)}
+                      className="text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2 py-1 rounded-lg font-medium cursor-pointer flex items-center justify-center gap-1">
+                      {playingVoiceId === rec.id ? '⏸️ Pause' : '▶️ Play Voice'}
+                    </button>
                     {rec.role === 'HOST' ? (
                       <>
                         <button onClick={() => downloadRecordingPair(rec)}

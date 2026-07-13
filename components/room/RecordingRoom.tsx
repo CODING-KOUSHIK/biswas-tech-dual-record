@@ -86,6 +86,9 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
 
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const localAudioPlayRef = useRef<HTMLAudioElement | null>(null);
+
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
   const stopRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -435,6 +438,9 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
         playCtxRef.current.close().catch(() => {});
         playCtxRef.current = null;
       }
+      if (localAudioPlayRef.current) {
+        localAudioPlayRef.current.pause();
+      }
       if (localSpeechTimeoutRef.current) clearTimeout(localSpeechTimeoutRef.current);
       if (partnerSpeechTimeoutRef.current) clearTimeout(partnerSpeechTimeoutRef.current);
     };
@@ -564,6 +570,25 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     } catch (err) {
       alert("Error preparing files for upload: " + String(err));
       setUploadingId(null);
+    }
+  };
+
+  const handlePlayVoice = (rec: RecordingRecord) => {
+    if (playingVoiceId === rec.id) {
+      if (localAudioPlayRef.current) {
+        localAudioPlayRef.current.pause();
+      }
+      setPlayingVoiceId(null);
+    } else {
+      if (localAudioPlayRef.current) {
+        localAudioPlayRef.current.pause();
+      }
+      const url = URL.createObjectURL(rec.localBlob);
+      const audio = new Audio(url);
+      localAudioPlayRef.current = audio;
+      audio.onended = () => setPlayingVoiceId(null);
+      audio.play().catch((err) => console.error("Playback failed", err));
+      setPlayingVoiceId(rec.id);
     }
   };
 
@@ -728,6 +753,10 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                           </div>
                           
                           <div className="flex gap-1.5 flex-wrap">
+                            <button onClick={() => handlePlayVoice(rec)}
+                              className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer flex items-center gap-1">
+                              {playingVoiceId === rec.id ? '⏸️ Pause' : '▶️ Play Voice'}
+                            </button>
                             {session.role === 'HOST' ? (
                               <>
                                 <button onClick={() => downloadRecordingPair(rec)}
