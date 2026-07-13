@@ -146,9 +146,9 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       const bufSize = 4096;
 
       // Connect script processors to a silent gain node to prevent speaker feedback loop
+      // We do NOT connect silence to ctx.destination to ensure no physical speaker routing occurs from WebAudio.
       const silence = ctx.createGain();
       silence.gain.value = 0;
-      silence.connect(ctx.destination);
 
       // Local mic capture
       const localSrc = ctx.createMediaStreamSource(localStream);
