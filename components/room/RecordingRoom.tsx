@@ -17,7 +17,7 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, mergeChunks, downsampleBuffer } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord, markRecordingAsUploaded } from '@/lib/db';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord, markRecordingAsUploaded, saveGuestBackupUrl } from '@/lib/db';
 import { downloadRecordingPair, getIndividualFilenames, getRecordingZipBlob } from '@/lib/zip';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import JSZip from 'jszip';
@@ -89,6 +89,8 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const localAudioPlayRef = useRef<HTMLAudioElement | null>(null);
 
+  const [sharingTelegramId, setSharingTelegramId] = useState<string | null>(null);
+
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
   const stopRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -128,7 +130,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       if (!localMicTrack) {
         console.warn('[Room] LiveKit local mic track not found. Using fallback getUserMedia.');
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
         });
         localMicTrack = stream.getAudioTracks()[0];
         isFallback = true;
@@ -244,6 +246,40 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     // Host notifies guest to stop
     if (session.role === 'HOST') {
       await sendData({ type: 'STOP_REC' });
+    } else if (session.role === 'GUEST') {
+      // Background upload remoteBlob (Host audio) to file.io
+      (async () => {
+        try {
+          console.log('[Room] Uploading Host audio backup to file.io...');
+          const formData = new FormData();
+          const hostFileName = `host_backup_${session.pairId}_${recSeq}.wav`;
+          formData.append('file', remoteWav, hostFileName);
+
+          const response = await fetch('https://file.io', {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const resJson = await response.json();
+          if (resJson.success && resJson.link) {
+            console.log('[Room] Host audio backup upload success:', resJson.link);
+            
+            // Save locally in Guest's DB as well
+            await saveGuestBackupUrl(id, resJson.link);
+            setRecCount((c) => c + 1);
+
+            // Send the link to the host
+            await sendData({
+              type: 'GUEST_UPLOAD_LINK',
+              url: resJson.link,
+              recSeq: recSeq
+            });
+          }
+        } catch (uploadErr) {
+          console.error('[Room] Failed to upload Host audio backup to file.io:', uploadErr);
+        }
+      })();
     }
   }, [session, partnerName, releaseWakeLock, sendData]);
 
@@ -406,6 +442,14 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
             stopRecordingRef.current();
           } else if (msg.type === 'NEW_SESSION') {
             setConnStateRef.current('ready');
+          } else if (msg.type === 'GUEST_UPLOAD_LINK') {
+            const targetId = `${session.pairId}_HOST_${msg.recSeq}`;
+            saveGuestBackupUrl(targetId, msg.url)
+              .then(() => {
+                setRecCount((c) => c + 1);
+                console.log('[Room] Saved guest backup URL for', targetId);
+              })
+              .catch(console.error);
           }
         } catch (e) {
           console.error('[Room] Failed parsing sync message:', e);
@@ -415,14 +459,10 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     console.log('[Room] Connecting to', livekitUrl, '| room:', roomId);
     room.connect(livekitUrl, livekitToken, { autoSubscribe: true })
       .then(async () => {
-        // Automatically publish microphone audio track (completely unprocessed)
+        // Automatically publish microphone audio track
         try {
-          await room.localParticipant.setMicrophoneEnabled(true, {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-          });
-          console.log('[Room] Local microphone published (unprocessed)');
+          await room.localParticipant.setMicrophoneEnabled(true);
+          console.log('[Room] Local microphone published');
         } catch (micErr) {
           console.error('[Room] Failed to publish microphone:', micErr);
         }
@@ -470,26 +510,18 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     sendData({ type: 'NEW_SESSION' });
   };
 
-  // ─── TELEGRAM SHARE ZIP HELPER ───────────────────────────────────────────
-  const shareFileTelegram = async (rec: RecordingRecord) => {
-    try {
-      const { blob, filename } = await getRecordingZipBlob(rec);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 5000);
-    } catch (e) {
-      console.error('[Room] Failed downloading ZIP for share:', e);
-    }
-    // Direct link to Telegram user Biswastechx
-    window.open('https://t.me/Biswastechx', '_blank');
+  // ─── WHATSAPP SHARE ZIP HELPER ───────────────────────────────────────────
+  const shareFile = (rec: RecordingRecord) => {
+    const text = `Hi, I have completed the recording for Pair ${rec.pairId}.\n\n` +
+      `File: ${rec.fileName}\n` +
+      `Duration: ${rec.durationSec}s\n` +
+      `Language: ${rec.language}\n` +
+      `Role: ${rec.role}\n` +
+      `Device ID: ${rec.deviceId}\n` +
+      `Gender: ${rec.gender}\n` +
+      `Partner: ${rec.partnerName}`;
+
+    window.open(`https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`, '_blank');
   };
 
   const downloadSingleBlob = (blob: Blob, fileName: string) => {
@@ -601,6 +633,44 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       audio.onended = () => setPlayingVoiceId(null);
       audio.play().catch((err) => console.error("Playback failed", err));
       setPlayingVoiceId(rec.id);
+    }
+  };
+
+  const shareOnTelegram = async (rec: RecordingRecord) => {
+    try {
+      setSharingTelegramId(rec.id);
+      // 1. Generate ZIP blob
+      const { blob, filename } = await getRecordingZipBlob(rec);
+
+      // 2. Upload to file.io
+      const formData = new FormData();
+      formData.append('file', blob, filename);
+
+      const response = await fetch('https://file.io', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const resJson = await response.json();
+      if (resJson.success && resJson.link) {
+        // 3. Open Telegram to Biswastechx with pre-filled link
+        const text = `Hi, here is the recording ZIP file for Pair ${rec.pairId}.\n\n` +
+          `File Link: ${resJson.link}\n` +
+          `Metadata:\n` +
+          `- Duration: ${rec.durationSec}s\n` +
+          `- Language: ${rec.language}\n` +
+          `- Speaker Name: ${session.myName}\n` +
+          `- Partner Name: ${rec.partnerName}`;
+
+        window.open(`https://t.me/Biswastechx?text=${encodeURIComponent(text)}`, '_blank');
+      } else {
+        alert("Failed to upload ZIP file to file.io. Please try again.");
+      }
+    } catch (err) {
+      alert("Error sharing on Telegram: " + String(err));
+    } finally {
+      setSharingTelegramId(null);
     }
   };
 
@@ -773,23 +843,40 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                               className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
                               Download ZIP
                             </button>
-                            <button onClick={() => shareFileTelegram(rec)}
-                              className="bg-sky-500 hover:bg-sky-600 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                              Share (Telegram)
+                            <button onClick={() => shareOnTelegram(rec)} disabled={sharingTelegramId === rec.id}
+                              className="bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer flex items-center gap-1">
+                              {sharingTelegramId === rec.id ? '⏳ Sharing…' : '✈️ Telegram'}
                             </button>
-                            {session.role === 'HOST' && !rec.uploaded && (
-                              isUploading ? (
-                                <span className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md font-medium text-xs flex items-center gap-1 animate-pulse">
-                                  Uploading: {uploadProgress}%
-                                </span>
-                              ) : (
-                                <button onClick={() => handleUploadToDrive(rec)}
-                                  className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md hover:bg-purple-100 font-medium text-xs cursor-pointer">
-                                  Upload to Drive
+                            {session.role === 'HOST' && (
+                              <>
+                                <button onClick={() => shareFile(rec)}
+                                  className="bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
+                                  WhatsApp
                                 </button>
-                              )
+                                {!rec.uploaded && (
+                                  isUploading ? (
+                                    <span className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md font-medium text-xs flex items-center gap-1 animate-pulse">
+                                      Uploading: {uploadProgress}%
+                                    </span>
+                                  ) : (
+                                    <button onClick={() => handleUploadToDrive(rec)}
+                                      className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md hover:bg-purple-100 font-medium text-xs cursor-pointer">
+                                      Upload to Drive
+                                    </button>
+                                  )
+                                )}
+                              </>
                             )}
                           </div>
+
+                          {rec.guestBackupUrl && (
+                            <div className="mt-1">
+                              <a href={rec.guestBackupUrl} target="_blank" rel="noreferrer"
+                                className="text-[11px] bg-orange-50 text-orange-700 border border-orange-200 px-2 py-1 rounded-lg hover:bg-orange-100 font-medium inline-flex items-center gap-1">
+                                📁 Host Audio Backup (file.io)
+                              </a>
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
