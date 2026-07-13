@@ -15,12 +15,22 @@ export async function POST(
       return NextResponse.json({ success: false, error: 'partnerDeviceId is required' }, { status: 400 });
     }
 
-    const invite = await bindPartner(code, partnerDeviceId);
-    if (!invite) {
-      return NextResponse.json(
-        { success: false, error: 'This invite link is already used by another device.' },
-        { status: 403 }
-      );
+    let invite;
+    if (code.startsWith('t_')) {
+      try {
+        const raw = Buffer.from(code.slice(2), 'base64url').toString('utf8');
+        invite = JSON.parse(raw);
+      } catch (e) {
+        return NextResponse.json({ success: false, error: 'Invalid invite link' }, { status: 400 });
+      }
+    } else {
+      invite = await bindPartner(code, partnerDeviceId);
+      if (!invite) {
+        return NextResponse.json(
+          { success: false, error: 'This invite link is already used by another device.' },
+          { status: 403 }
+        );
+      }
     }
 
     return NextResponse.json({

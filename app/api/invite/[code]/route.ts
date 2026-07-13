@@ -9,7 +9,18 @@ export async function GET(
 ) {
   try {
     const { code } = await params;
-    const invite = await getInvite(code);
+    let invite;
+
+    if (code.startsWith('t_')) {
+      try {
+        const raw = Buffer.from(code.slice(2), 'base64url').toString('utf8');
+        invite = JSON.parse(raw);
+      } catch (e) {
+        return NextResponse.json({ success: false, error: 'Invalid invite link' }, { status: 400 });
+      }
+    } else {
+      invite = await getInvite(code);
+    }
 
     if (!invite) {
       return NextResponse.json({ success: false, error: 'Invite not found or expired' }, { status: 404 });

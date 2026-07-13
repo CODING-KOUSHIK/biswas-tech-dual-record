@@ -92,9 +92,28 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     const updatePartners = () => {
       const remotes = Array.from(room.remoteParticipants.values());
       const has = remotes.length > 0;
-      setPartnerConnected(has);
+
       if (has) {
         const p = remotes[0];
+        const parts = p.identity.split('_');
+        const remoteDeviceId = parts[0];
+        const remoteRole = parts[1];
+
+        // Host device binding validation
+        if (session.role === 'HOST' && remoteRole === 'GUEST') {
+          const boundKey = `btd_bound_guest_${session.pairId}`;
+          const existingBoundId = localStorage.getItem(boundKey);
+          if (!existingBoundId) {
+            localStorage.setItem(boundKey, remoteDeviceId);
+          } else if (existingBoundId !== remoteDeviceId) {
+            console.warn('[Room] Rejecting connection: different partner device', remoteDeviceId);
+            setConnState('error');
+            setErrorMsg('Access denied. This invite link has already been used by another device.');
+            room.disconnect();
+            return;
+          }
+        }
+
         try {
           const meta = JSON.parse(p.metadata ?? '{}') as { name?: string };
           setPartnerName(meta.name ?? p.identity ?? session.partnerName);
@@ -102,8 +121,10 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
           setPartnerName(p.identity ?? session.partnerName);
         }
       }
+
+      setPartnerConnected(has);
       setConnState((cur) => {
-        if (cur === 'recording' || cur === 'stopping' || cur === 'done') return cur;
+        if (cur === 'recording' || cur === 'stopping' || cur === 'done' || cur === 'error') return cur;
         return has ? 'ready' : 'waiting';
       });
     };

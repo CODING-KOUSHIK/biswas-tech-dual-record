@@ -35,12 +35,33 @@ export async function POST(request: NextRequest) {
       createdAt: Date.now(),
     };
 
-    await createInvite(invite);
+    try {
+      await createInvite(invite);
+      const origin = request.headers.get('origin') ?? `https://${request.headers.get('host')}`;
+      const inviteUrl = `${origin}/invite/${code}`;
+      return NextResponse.json({ success: true, code, pairId, roomId, inviteUrl });
+    } catch (err) {
+      console.warn('[invite/create] Redis write failed, falling back to stateless token:', err);
+      
+      // Package invite details in a stateless token prefixed with 't_'
+      const payload = {
+        code: `t_${code}`,
+        pairId,
+        roomId,
+        hostDeviceId,
+        hostName,
+        hostLanguage,
+        hostGender,
+        partnerGender,
+        boundPartnerDeviceId: null,
+        createdAt: Date.now(),
+      };
+      const token = 't_' + Buffer.from(JSON.stringify(payload)).toString('base64url');
+      const origin = request.headers.get('origin') ?? `https://${request.headers.get('host')}`;
+      const inviteUrl = `${origin}/invite/${token}`;
 
-    const origin = request.headers.get('origin') ?? `https://${request.headers.get('host')}`;
-    const inviteUrl = `${origin}/invite/${code}`;
-
-    return NextResponse.json({ success: true, code, pairId, roomId, inviteUrl });
+      return NextResponse.json({ success: true, code: token, pairId, roomId, inviteUrl });
+    }
   } catch (err) {
     console.error('[invite/create]', err);
     return NextResponse.json(
@@ -49,3 +70,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
