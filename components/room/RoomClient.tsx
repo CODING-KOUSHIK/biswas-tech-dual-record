@@ -19,7 +19,7 @@ import {
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
-import { useSingleTab } from '@/hooks/useSingleTab';
+// useSingleTab intentionally removed — breaks two-tab recording sessions
 import { saveRecording, updateRecordingWithRemote } from '@/lib/indexeddb';
 import { buildFilename } from '@/lib/zip';
 import { RecordingTimer } from './RecordingTimer';
@@ -92,7 +92,7 @@ export function RoomClient({ roomId, livekitToken, livekitUrl, userInfo }: RoomC
   const router = useRouter();
   const { showToast } = useToast();
 
-  useSingleTab();
+  // useSingleTab() removed — host and guest must both be in room (2 tabs OK)
 
   const [uiState, setUiState] = useState<UIState>('checking-mic');
   const [errorMsg, setErrorMsg] = useState<string>('');
