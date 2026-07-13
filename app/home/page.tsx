@@ -132,45 +132,52 @@ export default function HomePage() {
     <div className="min-h-screen flex items-center justify-center bg-[#0f172a]">
       <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
     </div>
-  );
-
-  // ── HOME ──
+  );  // ── HOME ──
   if (view === 'home') return (
-    <div className="min-h-screen flex flex-col bg-[#0f172a]">
-      <header className="bg-[#0f172a]/90 backdrop-blur-md border-b border-white/[0.06] px-5 py-4 sticky top-0 z-10">
+    <div className="min-h-screen flex flex-col bg-[#0f172a] text-white">
+      <header className="bg-[#0f172a]/95 backdrop-blur-md border-b border-white/[0.06] px-5 py-4 sticky top-0 z-10">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-[17px] font-bold text-white tracking-tight">Biswas Tech</h1>
-            <p className="text-[11px] text-slate-500 mt-0.5">{profile.name} · {profile.language}</p>
+            <h1 className="text-[18px] font-bold tracking-tight">Biswas Tech</h1>
+            <p className="text-[12px] text-slate-500 mt-0.5">{profile.name} · {profile.language}</p>
           </div>
           <button onClick={handleReset} disabled={resetting}
-            className="text-[11px] text-slate-500 hover:text-red-400 border border-slate-700 hover:border-red-500/30 rounded-lg px-3 py-1.5 font-medium transition-colors active:scale-95">
+            className="text-[12px] text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-500/30 rounded-xl px-4 py-2 font-semibold transition-colors active:scale-95">
             {resetting ? '…' : 'Reset'}
           </button>
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col justify-center px-5 py-8 gap-4 max-w-lg mx-auto w-full fade-in">
+      <main className="flex-1 flex flex-col justify-center px-6 py-10 gap-5 max-w-lg mx-auto w-full fade-in">
+        {/* Invite Partner Card */}
         <button onClick={() => { setView('invite'); setInviteResult(null); }}
-          className="w-full rounded-2xl p-5 text-left active:scale-[0.97] transition-transform"
-          style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', boxShadow: '0 8px 32px rgba(79, 70, 229, 0.35)' }}>
-          <p className="text-2xl mb-3">🔗</p>
-          <h2 className="text-lg font-bold text-white">Invite Partner</h2>
-          <p className="text-indigo-200 text-[13px] mt-1">Generate a meeting link to record together</p>
+          className="w-full rounded-2xl p-6 text-left active:scale-[0.98] transition-all flex flex-col justify-between h-36"
+          style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', boxShadow: '0 8px 32px rgba(79, 70, 229, 0.25)' }}>
+          <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">🔗</div>
+          <div>
+            <h2 className="text-xl font-extrabold text-white">Invite Partner</h2>
+            <p className="text-indigo-100 text-[13px] mt-1 font-medium">Generate a dual-session recording room link</p>
+          </div>
         </button>
 
+        {/* Previous Recordings Card */}
         <button onClick={() => setView('recordings')}
-          className="w-full bg-[#1e293b] border border-white/[0.06] rounded-2xl p-5 text-left active:scale-[0.97] transition-transform">
-          <p className="text-2xl mb-3">🎙️</p>
-          <h2 className="text-lg font-bold text-white">Previous Recordings</h2>
-          <p className="text-slate-500 text-[13px] mt-1">View and download saved recordings</p>
+          className="w-full bg-[#1e293b] border border-white/[0.06] rounded-2xl p-6 text-left active:scale-[0.98] transition-all flex flex-col justify-between h-36">
+          <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-xl">🎙️</div>
+          <div>
+            <h2 className="text-xl font-extrabold text-white">Previous Recordings</h2>
+            <p className="text-slate-400 text-[13px] mt-1 font-medium">View and download your localized wav files</p>
+          </div>
         </button>
 
+        {/* Download All Card */}
         <button onClick={() => { setView('recordings'); setTimeout(() => handleDownloadAll(), 300); }}
-          className="w-full bg-[#1e293b] border border-white/[0.06] rounded-2xl p-5 text-left active:scale-[0.97] transition-transform">
-          <p className="text-2xl mb-3">📦</p>
-          <h2 className="text-lg font-bold text-white">Download All</h2>
-          <p className="text-slate-500 text-[13px] mt-1">Download all recordings as ZIP</p>
+          className="w-full bg-[#1e293b] border border-white/[0.06] rounded-2xl p-6 text-left active:scale-[0.98] transition-all flex flex-col justify-between h-36">
+          <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-xl">📦</div>
+          <div>
+            <h2 className="text-xl font-extrabold text-white">Download All</h2>
+            <p className="text-slate-400 text-[13px] mt-1 font-medium">Batch download all session ZIP archives</p>
+          </div>
         </button>
       </main>
     </div>
@@ -178,65 +185,69 @@ export default function HomePage() {
 
   // ── INVITE ──
   if (view === 'invite') return (
-    <div className="min-h-screen flex flex-col bg-[#0f172a]">
-      <header className="bg-[#0f172a]/90 backdrop-blur-md border-b border-white/[0.06] px-5 py-4 sticky top-0 z-10">
+    <div className="min-h-screen flex flex-col bg-[#0f172a] text-white">
+      <header className="bg-[#0f172a]/90 backdrop-blur-md border-b border-white/[0.06] px-5 py-4.5 sticky top-0 z-10">
         <div className="max-w-lg mx-auto flex items-center gap-3">
-          <button onClick={() => setView('home')} className="w-8 h-8 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center justify-center text-slate-400 text-sm">←</button>
-          <h1 className="text-[17px] font-bold text-white">Invite Partner</h1>
+          <button onClick={() => setView('home')} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-xl flex items-center justify-center text-slate-350 text-base font-bold active:scale-95 transition-transform">←</button>
+          <h1 className="text-[18px] font-bold">Invite Partner</h1>
         </div>
       </header>
 
-      <main className="flex-1 px-5 py-6 max-w-lg mx-auto w-full fade-in">
+      <main className="flex-1 px-6 py-8 max-w-lg mx-auto w-full fade-in flex flex-col justify-center">
         {!inviteResult ? (
           <div className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-6 space-y-6">
             <div>
-              <h2 className="text-base font-semibold text-white">Partner&apos;s Gender</h2>
-              <p className="text-[13px] text-slate-500 mt-1">Used for file naming</p>
+              <h2 className="text-[17px] font-bold text-white">Partner&apos;s Gender</h2>
+              <p className="text-[13px] text-slate-400 mt-1">Used automatically for file metadata and sequence naming</p>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               {(['MALE', 'FEMALE'] as Gender[]).map(g => (
                 <button key={g} onClick={() => setPartnerGender(g)}
-                  className={`py-3.5 rounded-xl text-[14px] font-semibold transition-all active:scale-95 ${
+                  className={`h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-95 ${
                     partnerGender === g
-                      ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/25'
-                      : 'border-2 border-slate-700 text-slate-400 hover:border-slate-600'
+                      ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/25 border-transparent'
+                      : 'border-2 border-slate-700 text-slate-400 hover:border-slate-650'
                   }`}>
                   {g === 'MALE' ? '♂ Male' : '♀ Female'}
                 </button>
               ))}
             </div>
             <button onClick={handleGenerateInvite} disabled={generating}
-              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-semibold text-[15px] disabled:opacity-50 active:scale-[0.97] transition-transform shadow-lg shadow-indigo-500/25">
-              {generating ? 'Generating…' : 'Generate Invite Link'}
+              className="w-full h-14 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-extrabold text-[15px] tracking-wide disabled:opacity-50 active:scale-[0.98] transition-all shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2">
+              {generating ? (
+                <><span className="w-5 h-5 border-3 border-white/40 border-t-white rounded-full animate-spin" />Generating Link…</>
+              ) : 'Generate Invite Link'}
             </button>
           </div>
         ) : (
-          <div className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-6 space-y-5">
+          <div className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-6 space-y-6">
             <div className="text-center">
-              <div className="w-14 h-14 rounded-full mx-auto mb-3 bg-green-500/10 flex items-center justify-center text-xl">✅</div>
-              <h2 className="text-lg font-bold text-white">Invite Ready!</h2>
-              <p className="text-[13px] text-slate-400 mt-1">Pair: <span className="font-mono font-bold text-indigo-400">{inviteResult.pairId}</span></p>
+              <div className="w-16 h-16 rounded-full mx-auto mb-4 bg-green-500/10 flex items-center justify-center text-2xl">✅</div>
+              <h2 className="text-xl font-extrabold text-white">Invite Link Created</h2>
+              <p className="text-[14px] text-slate-400 mt-1">Pair ID: <span className="font-mono font-bold text-indigo-400">{inviteResult.pairId}</span></p>
             </div>
 
-            <div className="bg-slate-800/60 border border-white/[0.06] rounded-xl p-4">
-              <p className="text-[11px] text-slate-500 mb-1.5">Invite Link</p>
-              <p className="text-[12px] font-mono text-indigo-400 break-all leading-relaxed">{inviteResult.url}</p>
+            <div className="bg-slate-800/60 border border-white/[0.06] rounded-2xl p-4">
+              <p className="text-[11px] text-slate-500 font-semibold mb-1">Room Access Url</p>
+              <p className="text-[13px] font-mono text-indigo-300 break-all leading-relaxed">{inviteResult.url}</p>
             </div>
 
-            <button onClick={handleCopy}
-              className={`w-full py-3 rounded-xl font-semibold text-[14px] transition-all active:scale-[0.97] ${
-                copied ? 'bg-green-600 text-white' : 'bg-slate-800 border border-white/[0.06] text-white hover:bg-slate-700'
-              }`}>
-              {copied ? '✓ Copied!' : '📋 Copy Link'}
-            </button>
+            <div className="space-y-3">
+              <button onClick={handleCopy}
+                className={`w-full h-14 rounded-2xl font-bold text-[14px] transition-all active:scale-[0.98] ${
+                  copied ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 border border-white/[0.06] text-white hover:bg-slate-700'
+                }`}>
+                {copied ? '✓ Link Copied to Clipboard!' : '📋 Copy Invite Link'}
+              </button>
 
-            <button onClick={handleEnterRoom}
-              className="w-full py-4 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-[16px] active:scale-[0.97] transition-transform shadow-lg shadow-indigo-500/25">
-              🎙️ Enter Recording Room
-            </button>
+              <button onClick={handleEnterRoom}
+                className="w-full h-15 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-extrabold text-[16px] active:scale-[0.98] transition-all shadow-lg shadow-indigo-500/20">
+                🎙️ Enter Recording Room
+              </button>
+            </div>
 
-            <button onClick={() => setInviteResult(null)} className="w-full text-[13px] text-slate-500 hover:text-slate-400 py-2 text-center">
-              Generate new link
+            <button onClick={() => setInviteResult(null)} className="w-full text-[13px] text-slate-500 hover:text-slate-300 font-medium py-2 text-center">
+              Create New Invite Link
             </button>
           </div>
         )}
@@ -246,23 +257,23 @@ export default function HomePage() {
 
   // ── RECORDINGS ──
   return (
-    <div className="min-h-screen flex flex-col bg-[#0f172a]">
+    <div className="min-h-screen flex flex-col bg-[#0f172a] text-white">
       <header className="bg-[#0f172a]/90 backdrop-blur-md border-b border-white/[0.06] px-5 py-4 sticky top-0 z-10">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <button onClick={() => setView('home')} className="w-8 h-8 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center justify-center text-slate-400 text-sm">←</button>
-            <h1 className="text-[17px] font-bold text-white">Recordings</h1>
+            <button onClick={() => setView('home')} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-xl flex items-center justify-center text-slate-400 text-base font-bold active:scale-95 transition-transform">←</button>
+            <h1 className="text-[18px] font-bold">Recordings</h1>
           </div>
           {recordings.length > 0 && (
             <button onClick={handleDownloadAll} disabled={downloadingAll}
-              className="text-[12px] bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-lg font-semibold disabled:opacity-50 active:scale-95 transition-transform">
-              {downloadingAll ? '…' : '📦 All'}
+              className="text-[13px] bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold disabled:opacity-50 active:scale-95 transition-transform">
+              {downloadingAll ? '…' : '📦 All ZIP'}
             </button>
           )}
         </div>
       </header>
 
-      <main className="flex-1 px-5 py-4 max-w-lg mx-auto w-full fade-in">
+      <main className="flex-1 px-5 py-6 max-w-lg mx-auto w-full fade-in">
         {loadingRecs ? (
           <div className="flex justify-center pt-20">
             <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
@@ -270,44 +281,47 @@ export default function HomePage() {
         ) : recordings.length === 0 ? (
           <div className="text-center pt-24">
             <div className="w-20 h-20 rounded-full mx-auto mb-5 bg-slate-800 flex items-center justify-center text-3xl">🎙️</div>
-            <p className="font-semibold text-white text-[15px]">No recordings yet</p>
+            <p className="font-semibold text-white text-[16px]">No recordings yet</p>
             <p className="text-[13px] text-slate-500 mt-1.5">Start a session from the home page</p>
           </div>
         ) : (
-          <div className="space-y-3 pt-1">
+          <div className="space-y-4">
             {recordings.map(rec => (
-              <div key={rec.id} className="bg-[#1e293b] border border-white/[0.06] rounded-xl p-4">
-                <p className="font-mono text-[11px] font-medium text-slate-300 break-all leading-relaxed">{rec.fileName}</p>
-                <p className="text-[11px] text-slate-600 mt-1">{fmtDate(rec.createdAt)}</p>
-                <div className="flex flex-wrap gap-1.5 mt-2.5">
-                  <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-medium">{rec.role}</span>
-                  <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-medium">{rec.language}</span>
-                  <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-medium">{fmtDur(rec.durationSec)}</span>
+              <div key={rec.id} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-5 space-y-4">
+                <div>
+                  <p className="font-mono text-[12px] font-semibold text-slate-200 break-all leading-relaxed">{rec.fileName}</p>
+                  <p className="text-[11px] text-slate-550 mt-1">{fmtDate(rec.createdAt)}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{rec.role}</span>
+                  <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{rec.language}</span>
+                  <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{fmtDur(rec.durationSec)}</span>
                   {rec.role === 'HOST' && rec.uploaded && (
-                    <span className="text-[10px] bg-green-500/10 text-green-400 px-2 py-0.5 rounded-full font-medium">✓ Uploaded</span>
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2.5 py-1 rounded-md font-bold">✓ Uploaded</span>
                   )}
                 </div>
-                <p className="text-[11px] text-slate-600 mt-2">Partner: {rec.partnerName}</p>
-                <div className="flex gap-2 mt-3 flex-wrap">
+                <p className="text-[11px] text-slate-500">Partner: {rec.partnerName}</p>
+                
+                <div className="grid grid-cols-2 gap-2 pt-2">
                   <button onClick={() => downloadRecordingPair(rec)}
-                    className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg font-semibold active:scale-95 transition-transform">
+                    className="h-12 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5 col-span-2">
                     Download ZIP
                   </button>
                   {rec.role === 'HOST' && !rec.uploaded && (
                     uploadingId === rec.id ? (
-                      <div className="flex items-center gap-2">
-                        <div className="progress-bar w-16"><div className="progress-fill" style={{ width: `${uploadProgress}%` }} /></div>
-                        <span className="text-[10px] text-indigo-400">{uploadProgress}%</span>
+                      <div className="h-12 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center gap-2 col-span-2">
+                        <div className="progress-bar w-24"><div className="progress-fill" style={{ width: `${uploadProgress}%` }} /></div>
+                        <span className="text-[12px] text-indigo-400 font-mono font-bold">{uploadProgress}%</span>
                       </div>
                     ) : (
                       <button onClick={() => handleUploadToDrive(rec)}
-                        className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/[0.06] px-3 py-1.5 rounded-lg font-medium active:scale-95 transition-transform">
-                        Upload
+                        className="h-12 bg-[#1e293b] hover:bg-slate-750 text-slate-350 border border-slate-750 rounded-xl font-semibold text-[13px] active:scale-95 transition-transform flex items-center justify-center">
+                        Upload to Drive
                       </button>
                     )
                   )}
                   <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
-                    className="text-[11px] bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg font-medium disabled:opacity-40 active:scale-95 transition-transform">
+                    className={`h-12 text-red-400 bg-red-500/15 hover:bg-red-500/25 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center ${rec.role !== 'HOST' || rec.uploaded ? 'col-span-2' : ''}`}>
                     {deletingId === rec.id ? '…' : 'Delete'}
                   </button>
                 </div>
@@ -315,7 +329,10 @@ export default function HomePage() {
             ))}
           </div>
         )}
+
       </main>
     </div>
   );
 }
+
+

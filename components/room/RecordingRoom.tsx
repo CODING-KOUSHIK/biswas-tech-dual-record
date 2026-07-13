@@ -708,85 +708,78 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
             {/* Action buttons (HOST controls all; GUEST wait states) */}
             {session.role === 'HOST' ? (
-              <>
+              <div className="w-full">
                 {connState === 'ready' && (
                   <button onClick={startRecording}
-                    className="w-full py-4 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-[16px] active:scale-[0.98] transition-all shadow-lg shadow-red-600/20">
+                    className="w-full h-14 rounded-2xl bg-gradient-to-r from-red-650 to-rose-650 hover:from-red-600 hover:to-rose-600 text-white font-extrabold text-[16px] tracking-wide active:scale-[0.98] transition-all shadow-lg shadow-red-600/20">
                     🔴 Start Recording
                   </button>
                 )}
                 {connState === 'recording' && (
                   <button onClick={stopRecording}
-                    className="w-full py-4 rounded-xl bg-slate-850 border border-slate-700 hover:bg-slate-800 text-white font-bold text-[16px] active:scale-[0.98] transition-all">
+                    className="w-full h-14 rounded-2xl bg-slate-800 border border-slate-700 hover:bg-slate-750 text-white font-extrabold text-[16px] tracking-wide active:scale-[0.98] transition-all">
                     ⬛ Stop Recording
                   </button>
                 )}
                 {connState === 'done' && (
                   <button onClick={handleStartNewSession}
-                    className="w-full py-4 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-[16px] active:scale-[0.98] transition-all shadow-lg shadow-indigo-600/25">
+                    className="w-full h-14 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-extrabold text-[16px] tracking-wide active:scale-[0.98] transition-all shadow-lg shadow-indigo-650/20">
                     🔴 Start New Recording
                   </button>
                 )}
-              </>
+              </div>
             ) : (
-              <>
+              <div className="w-full">
                 {connState === 'ready' && (
-                  <div className="w-full bg-[#1e293b] border border-white/[0.06] rounded-xl p-4 text-center">
-                    <p className="text-[13px] font-semibold text-slate-400">⏳ Waiting for Host to start recording…</p>
+                  <div className="w-full bg-[#1e293b] border border-white/[0.06] rounded-2xl py-4.5 text-center">
+                    <p className="text-[14px] font-bold text-slate-400">⏳ Waiting for Host to start recording…</p>
                   </div>
                 )}
-              </>
+              </div>
             )}
 
             {/* Session Recordings List */}
             {currentRecordings.length > 0 && (
-              <div className="w-full pt-4 mt-2 space-y-2.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                <h3 className="font-semibold text-[13px] text-slate-400">Session Recordings</h3>
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              <div className="w-full pt-4 mt-2 space-y-3.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <h3 className="font-bold text-[14px] text-slate-450">Session Recordings</h3>
+                <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
                   {currentRecordings.map((rec) => {
                     const isUploading = uploadingId === rec.id;
 
                     return (
-                      <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-xl p-3.5 space-y-2.5">
+                      <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
                         <div className="flex items-center justify-between">
-                          <p className="text-[11px] font-mono text-slate-300 break-all leading-relaxed flex-1 mr-2">{rec.fileName}</p>
-                          <span className="text-[10px] bg-slate-850 text-slate-400 px-2 py-0.5 rounded font-medium shrink-0">{rec.durationSec}s</span>
+                          <p className="text-[11px] font-mono text-slate-350 break-all leading-relaxed flex-1 mr-3">{rec.fileName}</p>
+                          <span className="text-[10px] bg-slate-850 text-slate-450 px-2 py-0.5 rounded-md font-semibold shrink-0">{rec.durationSec}s</span>
                         </div>
 
                         {session.role === 'HOST' && rec.uploaded && (
-                          <span className="text-[10px] bg-green-500/10 text-green-400 px-2 py-0.5 rounded font-semibold inline-block">✓ Uploaded</span>
+                          <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2 py-0.5 rounded font-bold inline-block">✓ Uploaded to Google Drive</span>
                         )}
 
-                        <div className="flex gap-2 flex-wrap items-center">
-                          {session.role === 'HOST' ? (
-                            <>
-                              <button onClick={() => downloadRecordingPair(rec)}
-                                className="text-[11px] bg-indigo-600 hover:bg-indigo-750 text-white px-3 py-1.5 rounded-lg font-semibold active:scale-95 transition-transform">
-                                Download ZIP
-                              </button>
-                              <button onClick={() => shareFile(rec)}
-                                className="text-[11px] bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 px-3 py-1.5 rounded-lg font-semibold active:scale-95 transition-transform">
-                                WhatsApp
-                              </button>
-                              {!rec.uploaded && (
-                                isUploading ? (
-                                  <div className="flex items-center gap-2">
-                                    <div className="progress-bar w-16"><div className="progress-fill" style={{ width: `${uploadProgress}%` }} /></div>
-                                    <span className="text-[10px] text-indigo-400 font-mono">{uploadProgress}%</span>
-                                  </div>
-                                ) : (
-                                  <button onClick={() => handleUploadToDrive(rec)}
-                                    className="text-[11px] bg-slate-800 hover:bg-slate-750 text-slate-300 border border-white/[0.06] px-3 py-1.5 rounded-lg font-medium active:scale-95 transition-transform">
-                                    Upload
-                                  </button>
-                                )
-                              )}
-                            </>
-                          ) : (
-                            <button onClick={() => downloadRecordingPair(rec)}
-                              className="text-[11px] bg-indigo-600 hover:bg-indigo-750 text-white px-3 py-1.5 rounded-lg font-semibold active:scale-95 transition-transform">
-                              Download ZIP
+                        <div className="grid grid-cols-2 gap-2 w-full pt-1">
+                          <button onClick={() => downloadRecordingPair(rec)}
+                            className={`h-11 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5 ${session.role !== 'HOST' ? 'col-span-2' : ''}`}>
+                            Download ZIP
+                          </button>
+                          {session.role === 'HOST' && (
+                            <button onClick={() => shareFile(rec)}
+                              className="h-11 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center">
+                              WhatsApp
                             </button>
+                          )}
+                          {session.role === 'HOST' && !rec.uploaded && (
+                            isUploading ? (
+                              <div className="h-11 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center gap-2 col-span-2">
+                                <div className="progress-bar w-20"><div className="progress-fill" style={{ width: `${uploadProgress}%` }} /></div>
+                                <span className="text-[11px] text-indigo-400 font-mono font-bold">{uploadProgress}%</span>
+                              </div>
+                            ) : (
+                              <button onClick={() => handleUploadToDrive(rec)}
+                                className="h-11 bg-slate-800 hover:bg-slate-750 text-slate-300 border border-white/[0.06] rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center col-span-2">
+                                Upload to Drive
+                              </button>
+                            )
                           )}
                         </div>
                       </div>
