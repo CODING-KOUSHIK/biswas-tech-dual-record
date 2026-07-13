@@ -1,5 +1,5 @@
 'use client';
-// app/home/page.tsx — Main home page with 3 cards
+// app/home/page.tsx — Main home page with 3 views: home, invite, recordings
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -54,9 +54,9 @@ export default function HomePage() {
     // Prompt for microphone permission on landing
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then((stream) => {
-        stream.getTracks().forEach((track) => track.stop()); // close the temporary stream
+        stream.getTracks().forEach((track) => track.stop());
       })
-      .catch((err) => {
+      .catch(() => {
         alert("Microphone permission is required to use this application. Please allow microphone access in your browser settings to continue.");
       });
   }, [router]);
@@ -132,9 +132,7 @@ export default function HomePage() {
           try {
             const res = JSON.parse(xhr.responseText);
             if (res.success) {
-              // Save to IndexedDB as uploaded
               await markRecordingAsUploaded(rec.id);
-              // Reload list
               const recs = await getAllRecordings();
               setRecordings(recs);
               alert("Audio files uploaded successfully to Google Drive!");
@@ -142,7 +140,6 @@ export default function HomePage() {
               alert(`Upload failed: ${res.error || 'Unknown error'}`);
             }
           } catch {
-            // Apps Script redirects or empty responses can happen, but if status is 200, try to mark as uploaded
             await markRecordingAsUploaded(rec.id);
             const recs = await getAllRecordings();
             setRecordings(recs);
@@ -230,19 +227,16 @@ export default function HomePage() {
     }
 
     try {
-      // 1. Delete IndexedDB
       const req = indexedDB.deleteDatabase('btd-recordings');
       await new Promise<void>((resolve, reject) => {
         req.onsuccess = () => resolve();
         req.onerror = () => reject(new Error('IndexedDB deletion failed'));
-        req.onblocked = () => resolve(); // Ignore block, proceed
+        req.onblocked = () => resolve();
       });
 
-      // 2. Clear LocalStorage and SessionStorage
       localStorage.clear();
       sessionStorage.clear();
 
-      // 3. Clear all cookies
       document.cookie.split(";").forEach((c) => {
         document.cookie = c
           .replace(/^ +/, "")
@@ -257,50 +251,52 @@ export default function HomePage() {
   };
 
   if (!profile) return (
-    <div className="min-h-screen bg-white flex items-center justify-center">
-      <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+    <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--bg-primary)' }}>
+      <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
     </div>
   );
 
   // ── Home view ──────────────────────────────────────────────────────────────
   if (view === 'home') return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <header className="bg-white border-b border-slate-200 px-4 py-4">
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+      {/* Header */}
+      <header className="glass-header px-4 py-4">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-bold text-slate-900">Biswas Tech</h1>
-            <p className="text-xs text-slate-500">{profile.name} · {deviceId} · {profile.language}</p>
+            <h1 className="text-lg font-bold text-white">Biswas Tech</h1>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{profile.name} · {profile.language}</p>
           </div>
           <button onClick={handleResetAppData}
-            className="text-xs bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 rounded-lg px-2.5 py-1.5 font-medium cursor-pointer">
-            Reset & Clear Storage
+            className="btn-ghost text-xs">
+            Reset
           </button>
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-4 gap-4 max-w-lg mx-auto w-full">
+      <main className="flex-1 flex flex-col items-center justify-center p-5 gap-4 max-w-lg mx-auto w-full fade-in">
         {/* Card 1: Invite Partner */}
         <button onClick={() => { setView('invite'); setInviteResult(null); }}
-          className="w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-2xl p-6 text-left transition-all shadow-sm">
-          <div className="text-3xl mb-3">🔗</div>
-          <h2 className="text-xl font-bold">Invite Partner</h2>
-          <p className="text-blue-200 text-sm mt-1">Generate a meeting link to record with a partner</p>
+          className="w-full rounded-2xl p-6 text-left transition-all active:scale-[0.97]"
+          style={{ background: 'var(--accent-gradient)', boxShadow: '0 8px 30px rgba(59, 130, 246, 0.25)' }}>
+          <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-xl mb-4">🔗</div>
+          <h2 className="text-xl font-bold text-white">Invite Partner</h2>
+          <p className="text-white/60 text-sm mt-1">Generate a meeting link to record with a partner</p>
         </button>
 
         {/* Card 2: Previous Recordings */}
         <button onClick={() => setView('recordings')}
-          className="w-full bg-white hover:bg-slate-50 active:scale-95 text-slate-900 rounded-2xl p-6 text-left transition-all shadow-sm border border-slate-200">
-          <div className="text-3xl mb-3">🎙️</div>
-          <h2 className="text-xl font-bold">Previous Recordings</h2>
-          <p className="text-slate-500 text-sm mt-1">View and download your saved recordings</p>
+          className="w-full glass-card p-6 text-left transition-all active:scale-[0.97]">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-xl mb-4" style={{ background: 'var(--bg-elevated)' }}>🎙️</div>
+          <h2 className="text-xl font-bold text-white">Previous Recordings</h2>
+          <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>View and download your saved recordings</p>
         </button>
 
         {/* Card 3: Download All */}
         <button onClick={() => { setView('recordings'); setTimeout(() => handleDownloadAll(), 300); }}
-          className="w-full bg-white hover:bg-slate-50 active:scale-95 text-slate-900 rounded-2xl p-6 text-left transition-all shadow-sm border border-slate-200">
-          <div className="text-3xl mb-3">📦</div>
-          <h2 className="text-xl font-bold">Download All Files</h2>
-          <p className="text-slate-500 text-sm mt-1">Download all recordings in one ZIP file</p>
+          className="w-full glass-card p-6 text-left transition-all active:scale-[0.97]">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-xl mb-4" style={{ background: 'var(--bg-elevated)' }}>📦</div>
+          <h2 className="text-xl font-bold text-white">Download All Files</h2>
+          <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Download all recordings in one ZIP file</p>
         </button>
       </main>
     </div>
@@ -308,63 +304,67 @@ export default function HomePage() {
 
   // ── Invite view ────────────────────────────────────────────────────────────
   if (view === 'invite') return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <header className="bg-white border-b border-slate-200 px-4 py-4">
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+      <header className="glass-header px-4 py-4">
         <div className="max-w-lg mx-auto flex items-center gap-3">
-          <button onClick={() => setView('home')} className="text-slate-500 hover:text-slate-900 text-lg">←</button>
-          <h1 className="text-lg font-bold text-slate-900">Invite Partner</h1>
+          <button onClick={() => setView('home')} className="text-white/60 hover:text-white text-lg w-8 h-8 flex items-center justify-center rounded-lg" style={{ background: 'var(--bg-elevated)' }}>←</button>
+          <h1 className="text-lg font-bold text-white">Invite Partner</h1>
         </div>
       </header>
 
-      <main className="flex-1 p-4 max-w-lg mx-auto w-full space-y-4 pt-6">
+      <main className="flex-1 p-5 max-w-lg mx-auto w-full space-y-4 pt-6 fade-in">
         {!inviteResult ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-5">
+          <div className="glass-card p-6 space-y-6">
             <div>
-              <h2 className="font-semibold text-slate-900">Partner&apos;s Gender</h2>
-              <p className="text-slate-500 text-sm mt-1">Used for recording file naming</p>
+              <h2 className="font-semibold text-white text-lg">Partner&apos;s Gender</h2>
+              <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Used for recording file naming</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               {(['MALE', 'FEMALE'] as Gender[]).map((g) => (
                 <button key={g} onClick={() => setPartnerGender(g)}
-                  className={['py-4 rounded-xl border-2 font-medium text-sm transition-all',
-                    partnerGender === g ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-slate-300',
-                  ].join(' ')}>
+                  className={`gender-toggle ${partnerGender === g ? 'active' : ''}`}>
                   {g === 'MALE' ? '♂ Male' : '♀ Female'}
                 </button>
               ))}
             </div>
             <button onClick={handleGenerateInvite} disabled={generating}
-              className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-sm">
-              {generating ? 'Generating…' : 'Generate Invite Link'}
+              className="btn btn-primary w-full text-base disabled:opacity-50">
+              {generating ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Generating…
+                </>
+              ) : 'Generate Invite Link'}
             </button>
           </div>
         ) : (
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+          <div className="glass-card p-6 space-y-5">
             <div className="text-center">
-              <div className="text-4xl mb-2">✅</div>
-              <h2 className="font-bold text-slate-900 text-lg">Invite Ready!</h2>
-              <p className="text-slate-500 text-sm">Pair ID: <span className="font-mono font-bold text-blue-600">{inviteResult.pairId}</span></p>
+              <div className="w-16 h-16 rounded-full mx-auto mb-3 flex items-center justify-center text-2xl" style={{ background: 'var(--success-soft)' }}>✅</div>
+              <h2 className="font-bold text-white text-lg">Invite Ready!</h2>
+              <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
+                Pair ID: <span className="font-mono font-bold gradient-text">{inviteResult.pairId}</span>
+              </p>
             </div>
 
             {/* Link display */}
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-              <p className="text-xs text-slate-500 mb-1">Invite Link</p>
-              <p className="text-blue-600 text-xs font-mono break-all">{inviteResult.url}</p>
+            <div className="rounded-xl p-4" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}>
+              <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Invite Link</p>
+              <p className="text-xs font-mono break-all" style={{ color: 'var(--accent-blue)' }}>{inviteResult.url}</p>
             </div>
 
             <button onClick={handleCopy}
-              className={['w-full py-3 rounded-xl font-semibold text-sm transition-all',
-                copied ? 'bg-green-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-900',
-              ].join(' ')}>
+              className={`btn w-full text-sm ${copied ? 'btn-primary' : 'btn-secondary'}`}>
               {copied ? '✓ Copied!' : '📋 Copy Link'}
             </button>
 
             <button onClick={handleEnterRoom}
-              className="w-full py-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-base transition-colors">
+              className="btn btn-primary w-full text-base font-bold" style={{ minHeight: '56px' }}>
               🎙️ Enter Recording Room
             </button>
 
-            <button onClick={() => setInviteResult(null)} className="w-full text-sm text-slate-400 hover:text-slate-600 py-2">
+            <button onClick={() => setInviteResult(null)}
+              className="w-full text-sm py-2 text-center" style={{ color: 'var(--text-muted)' }}>
               Generate new link
             </button>
           </div>
@@ -375,82 +375,82 @@ export default function HomePage() {
 
   // ── Recordings view ────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <header className="bg-white border-b border-slate-200 px-4 py-4">
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+      <header className="glass-header px-4 py-4">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <button onClick={() => setView('home')} className="text-slate-500 hover:text-slate-900 text-lg">←</button>
-            <h1 className="text-lg font-bold text-slate-900">Previous Recordings</h1>
+            <button onClick={() => setView('home')} className="text-white/60 hover:text-white text-lg w-8 h-8 flex items-center justify-center rounded-lg" style={{ background: 'var(--bg-elevated)' }}>←</button>
+            <h1 className="text-lg font-bold text-white">Recordings</h1>
           </div>
           {recordings.length > 0 && (
             <button onClick={handleDownloadAll} disabled={downloadingAll}
-              className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-medium disabled:opacity-50">
+              className="btn btn-primary btn-sm disabled:opacity-50">
               {downloadingAll ? '…' : '📦 All'}
             </button>
           )}
         </div>
       </header>
 
-      <main className="flex-1 p-4 max-w-lg mx-auto w-full">
+      <main className="flex-1 p-4 max-w-lg mx-auto w-full fade-in">
         {loadingRecs ? (
-          <div className="flex justify-center pt-12">
-            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div className="flex justify-center pt-16">
+            <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
           </div>
         ) : recordings.length === 0 ? (
-          <div className="text-center pt-16 text-slate-400">
-            <div className="text-5xl mb-3">🎙️</div>
-            <p className="font-medium">No recordings yet</p>
-            <p className="text-sm mt-1">Start a session from the home page</p>
+          <div className="text-center pt-20">
+            <div className="w-20 h-20 rounded-full mx-auto mb-4 flex items-center justify-center text-3xl" style={{ background: 'var(--bg-elevated)' }}>🎙️</div>
+            <p className="font-semibold text-white">No recordings yet</p>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Start a session from the home page</p>
           </div>
         ) : (
           <div className="space-y-3 pt-2">
             {recordings.map((rec) => (
-              <div key={rec.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div key={rec.id} className="glass-card-solid p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <p className="font-mono text-xs font-semibold text-slate-800 break-all">{rec.fileName}</p>
-                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {rec.id}</p>
-                    <p className="text-xs text-slate-500 mt-1">{formatDate(rec.createdAt)}</p>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{rec.role}</span>
-                      <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{rec.language}</span>
-                      <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{formatDuration(rec.durationSec)}</span>
+                    <p className="font-mono text-xs font-semibold text-white/90 break-all leading-relaxed">{rec.fileName}</p>
+                    <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>{formatDate(rec.createdAt)}</p>
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      <span className="badge badge-muted">{rec.role}</span>
+                      <span className="badge badge-muted">{rec.language}</span>
+                      <span className="badge badge-muted">{formatDuration(rec.durationSec)}</span>
                       {rec.role === 'HOST' && rec.uploaded && (
-                        <span className="text-[11px] bg-green-50 text-green-600 px-2 py-0.5 rounded-full font-medium border border-green-200">✅ Uploaded</span>
+                        <span className="badge badge-success">✓ Uploaded</span>
                       )}
                     </div>
-                    <p className="text-xs text-slate-400 mt-1.5">Partner: {rec.partnerName} ({rec.partnerGender})</p>
+                    <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>Partner: {rec.partnerName} ({rec.partnerGender})</p>
                   </div>
-                  <div className="flex flex-col gap-1.5 shrink-0 w-28">
+                  <div className="flex flex-col gap-1.5 shrink-0">
                     {rec.role === 'HOST' ? (
                       <>
                         <button onClick={() => downloadRecordingPair(rec)}
-                          className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
+                          className="btn btn-primary btn-xs">
                           Download ZIP
                         </button>
                         {!rec.uploaded && (
                           uploadingId === rec.id ? (
-                            <span className="text-[11px] bg-purple-50 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium text-center animate-pulse">
-                              {uploadProgress}%
-                            </span>
+                            <div>
+                              <div className="progress-bar w-full mb-1">
+                                <div className="progress-fill" style={{ width: `${uploadProgress}%` }} />
+                              </div>
+                              <p className="text-[10px] text-center" style={{ color: 'var(--accent-blue)' }}>{uploadProgress}%</p>
+                            </div>
                           ) : (
                             <button onClick={() => handleUploadToDrive(rec)}
-                              className="text-[11px] bg-purple-50 hover:bg-purple-100 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium cursor-pointer">
+                              className="btn btn-secondary btn-xs">
                               Upload Drive
                             </button>
                           )
                         )}
                       </>
                     ) : (
-                      <>
-                        <button onClick={() => downloadRecordingPair(rec)}
-                          className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
-                          Download ZIP
-                        </button>
-                      </>
+                      <button onClick={() => downloadRecordingPair(rec)}
+                        className="btn btn-primary btn-xs">
+                        Download ZIP
+                      </button>
                     )}
                     <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
-                      className="text-[11px] bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1 rounded-lg font-medium border border-red-200 disabled:opacity-50 cursor-pointer">
+                      className="btn btn-xs disabled:opacity-50" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>
                       {deletingId === rec.id ? '…' : 'Delete'}
                     </button>
                   </div>

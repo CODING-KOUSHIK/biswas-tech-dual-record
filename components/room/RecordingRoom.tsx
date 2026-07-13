@@ -568,45 +568,52 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-4 py-3">
+      <header className="glass-header px-4 py-3">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div>
-            <h1 className="font-bold text-slate-900">Biswas Tech</h1>
-            <p className="text-xs text-slate-400">Room #{session.pairId} · {session.role}</p>
+            <h1 className="font-bold text-white text-base">Biswas Tech</h1>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="font-mono text-xs px-2 py-0.5 rounded-md" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
+                {session.pairId}
+              </span>
+              <span className="badge badge-muted">{session.role}</span>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <span className={`text-xs font-medium ${sigColor}`}>{sigLabel}</span>
+          <div className="flex items-center gap-2">
+            <span className={`text-xs font-semibold ${sigColor}`}>{sigLabel}</span>
             <button onClick={() => {
               if (connState === 'recording' && !confirm('Recording in progress. Leave?')) return;
               roomRef.current?.disconnect();
               router.replace('/home');
-            }} className="text-xs bg-slate-100 hover:bg-red-100 hover:text-red-700 text-slate-600 px-3 py-1.5 rounded-lg font-medium">
+            }} className="btn-ghost">
               Leave
             </button>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-4 max-w-lg mx-auto w-full gap-4">
+      <main className="flex-1 flex flex-col items-center justify-center p-5 max-w-lg mx-auto w-full gap-4 fade-in">
 
         {/* Connecting */}
         {connState === 'connecting' && (
           <div className="text-center">
-            <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <p className="font-semibold text-slate-900">Connecting to room…</p>
-            <p className="text-slate-500 text-sm mt-1">Please allow microphone access</p>
+            <div className="w-14 h-14 border-2 border-t-transparent rounded-full animate-spin mx-auto mb-4" style={{ borderColor: 'var(--accent-blue)', borderTopColor: 'transparent' }} />
+            <p className="font-semibold text-white text-lg">Connecting to room…</p>
+            <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>Please allow microphone access</p>
           </div>
         )}
 
         {/* Error */}
         {(connState === 'error' || connState === 'disconnected') && (
           <div className="text-center max-w-sm">
-            <div className="text-5xl mb-4">{connState === 'error' ? '⚠️' : '🔌'}</div>
-            <h2 className="font-bold text-slate-900 text-lg mb-2">{connState === 'error' ? 'Connection Failed' : 'Disconnected'}</h2>
-            <p className="text-slate-500 text-sm mb-4">{errorMsg}</p>
-            <button onClick={() => router.replace('/home')} className="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium">Go Home</button>
+            <div className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center text-2xl" style={{ background: connState === 'error' ? 'var(--danger-soft)' : 'var(--bg-elevated)' }}>
+              {connState === 'error' ? '⚠️' : '🔌'}
+            </div>
+            <h2 className="font-bold text-white text-lg mb-2">{connState === 'error' ? 'Connection Failed' : 'Disconnected'}</h2>
+            <p className="text-sm mb-5" style={{ color: 'var(--text-muted)' }}>{errorMsg}</p>
+            <button onClick={() => router.replace('/home')} className="btn btn-primary">Go Home</button>
           </div>
         )}
 
@@ -615,63 +622,83 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
           <>
             {/* Participant cards */}
             <div className="grid grid-cols-2 gap-3 w-full">
-              <div className="bg-white border border-slate-200 rounded-2xl p-4 text-center shadow-sm">
-                <div className={`w-16 h-16 rounded-full mx-auto mb-2 flex items-center justify-center text-3xl ${iAmSpeaking ? 'bg-green-100 speak-pulse ring-2 ring-green-400' : 'bg-slate-100'}`}>
+              {/* Me */}
+              <div className="glass-card p-4 text-center">
+                <div className={`w-16 h-16 rounded-full mx-auto mb-3 flex items-center justify-center text-2xl transition-all ${iAmSpeaking ? 'speak-pulse' : ''}`}
+                  style={{ background: iAmSpeaking ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(139,92,246,0.3))' : 'var(--bg-elevated)' }}>
                   🎙️
                 </div>
-                <p className="text-xs text-slate-400">You</p>
-                <p className="font-bold text-slate-900 text-sm truncate">{session.myName}</p>
-                <p className="text-xs text-green-600 font-medium mt-0.5">● Connected</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>You</p>
+                <p className="font-bold text-white text-sm truncate mt-0.5">{session.myName}</p>
+                <div className="flex items-center justify-center gap-1 mt-1.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: 'var(--success)' }} />
+                  <span className="text-xs font-medium" style={{ color: 'var(--success)' }}>Connected</span>
+                </div>
               </div>
 
-              <div className={`bg-white border rounded-2xl p-4 text-center shadow-sm ${partnerConnected ? 'border-slate-200' : 'border-dashed border-slate-300'}`}>
-                <div className={`w-16 h-16 rounded-full mx-auto mb-2 flex items-center justify-center text-3xl ${partnerSpeaking && partnerConnected ? 'bg-green-100 speak-pulse ring-2 ring-green-400' : 'bg-slate-100'}`}>
+              {/* Partner */}
+              <div className={`glass-card p-4 text-center ${!partnerConnected ? 'opacity-60' : ''}`} style={{ borderStyle: partnerConnected ? 'solid' : 'dashed' }}>
+                <div className={`w-16 h-16 rounded-full mx-auto mb-3 flex items-center justify-center text-2xl transition-all ${partnerSpeaking && partnerConnected ? 'speak-pulse' : ''}`}
+                  style={{ background: partnerSpeaking && partnerConnected ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(139,92,246,0.3))' : 'var(--bg-elevated)' }}>
                   {partnerConnected ? '🎙️' : '⏳'}
                 </div>
-                <p className="text-xs text-slate-400">Partner</p>
-                <p className="font-bold text-slate-900 text-sm truncate">{partnerName}</p>
-                <p className={`text-xs font-medium mt-0.5 ${partnerConnected ? 'text-green-600' : 'text-slate-400'}`}>
-                  {partnerConnected ? '● Connected' : 'Waiting…'}
-                </p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Partner</p>
+                <p className="font-bold text-white text-sm truncate mt-0.5">{partnerName}</p>
+                <div className="flex items-center justify-center gap-1 mt-1.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: partnerConnected ? 'var(--success)' : 'var(--text-muted)' }} />
+                  <span className="text-xs font-medium" style={{ color: partnerConnected ? 'var(--success)' : 'var(--text-muted)' }}>
+                    {partnerConnected ? 'Connected' : 'Waiting…'}
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Status */}
+            {/* Status: Waiting */}
             {connState === 'waiting' && (
-              <div className="w-full bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
-                <p className="text-blue-800 font-medium text-sm">Waiting for partner to connect…</p>
-                <p className="text-blue-500 text-xs mt-1">Share the invite link with your partner</p>
+              <div className="w-full glass-card p-4 text-center">
+                <p className="font-medium text-sm" style={{ color: 'var(--accent-blue)' }}>Waiting for partner to connect…</p>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Share the invite link with your partner</p>
               </div>
             )}
 
+            {/* Status: Done */}
             {connState === 'done' && (
-              <div className="w-full bg-green-50 border border-green-200 rounded-xl p-4 text-center">
-                <p className="text-green-800 font-semibold">✅ Recording #{recCount} saved!</p>
+              <div className="w-full rounded-xl p-4 text-center" style={{ background: 'var(--success-soft)', border: '1px solid rgba(34, 197, 94, 0.2)' }}>
+                <p className="font-semibold" style={{ color: 'var(--success)' }}>✓ Recording #{recCount} saved!</p>
                 {session.role === 'GUEST' ? (
-                  <p className="text-green-600 text-xs mt-1">Waiting for host to start new recording…</p>
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Waiting for host to start new recording…</p>
                 ) : (
-                  <p className="text-green-600 text-xs mt-1">You can start another recording without reconnecting</p>
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>You can start another recording without reconnecting</p>
                 )}
               </div>
             )}
 
             {/* Timer */}
             {connState === 'recording' && (
-              <div className="w-full bg-red-50 border border-red-200 rounded-2xl p-5 text-center">
-                <div className="flex items-center justify-center gap-2 mb-1">
-                  <span className="w-3 h-3 bg-red-500 rounded-full rec-blink" />
-                  <span className="text-red-600 font-semibold text-sm uppercase tracking-wide">
+              <div className="w-full glass-card p-6 text-center rec-glow">
+                <div className="flex items-center justify-center gap-2 mb-2">
+                  <span className="w-3 h-3 rounded-full rec-blink" style={{ background: 'var(--danger)' }} />
+                  <span className="font-semibold text-sm uppercase tracking-wider" style={{ color: 'var(--danger)' }}>
                     {session.role === 'HOST' ? 'Recording' : 'Recording (Host Control)'}
                   </span>
                 </div>
-                <p className="font-mono text-5xl font-bold text-slate-900 tracking-wider">{fmtTime(recSeconds)}</p>
+                <p className="font-mono text-5xl font-bold text-white tracking-wider mb-3">{fmtTime(recSeconds)}</p>
+                {/* Waveform bars */}
+                <div className="wave-bars mx-auto">
+                  <div className="wave-bar" />
+                  <div className="wave-bar" />
+                  <div className="wave-bar" />
+                  <div className="wave-bar" />
+                  <div className="wave-bar" />
+                </div>
               </div>
             )}
 
+            {/* Stopping */}
             {connState === 'stopping' && (
-              <div className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
-                <div className="w-5 h-5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                <p className="text-slate-600 text-sm font-medium">Saving recording…</p>
+              <div className="w-full glass-card p-5 text-center">
+                <div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin mx-auto mb-2" style={{ borderColor: 'var(--text-secondary)', borderTopColor: 'transparent' }} />
+                <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Saving recording…</p>
               </div>
             )}
 
@@ -680,86 +707,86 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
               <>
                 {connState === 'ready' && (
                   <button onClick={startRecording}
-                    className="w-full py-5 rounded-2xl bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xl transition-all shadow-md">
-                    🔴 Start Recording
+                    className="btn btn-danger w-full text-lg font-bold" style={{ minHeight: '60px', boxShadow: '0 8px 30px rgba(239, 68, 68, 0.3)' }}>
+                    ● Start Recording
                   </button>
                 )}
                 {connState === 'recording' && (
                   <button onClick={stopRecording}
-                    className="w-full py-5 rounded-2xl bg-slate-800 hover:bg-slate-900 active:scale-95 text-white font-bold text-xl transition-all shadow-md">
-                    ⬛ Stop Recording
+                    className="btn btn-secondary w-full text-lg font-bold" style={{ minHeight: '60px', background: 'rgba(30, 41, 59, 0.8)', border: '2px solid var(--border-medium)' }}>
+                    ■ Stop Recording
                   </button>
                 )}
                 {connState === 'done' && (
                   <button onClick={handleStartNewSession}
-                    className="w-full py-5 rounded-2xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-lg transition-all shadow-md">
-                    🔴 Start New Recording
+                    className="btn btn-primary w-full text-lg font-bold" style={{ minHeight: '60px' }}>
+                    ● Start New Recording
                   </button>
                 )}
               </>
             ) : (
               <>
                 {connState === 'ready' && (
-                  <div className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
-                    <p className="text-slate-600 font-medium text-sm">⏳ Waiting for Host to start recording…</p>
+                  <div className="w-full glass-card p-4 text-center">
+                    <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>⏳ Waiting for Host to start recording…</p>
                   </div>
                 )}
               </>
             )}
 
-            {/* Session Recordings List (WAV file list inside meeting room) */}
+            {/* Session Recordings List */}
             {currentRecordings.length > 0 && (
-              <div className="w-full border-t border-slate-200 pt-4 mt-2 space-y-2">
-                <h3 className="font-semibold text-slate-800 text-sm">Saved Recordings this Session:</h3>
+              <div className="w-full pt-4 mt-2 space-y-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <h3 className="font-semibold text-sm text-white/80">Session Recordings</h3>
                 <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                   {currentRecordings.map((rec) => {
                     const { hostName, guestName, hostBlob, guestBlob } = getIndividualFilenames(rec);
                     const isUploading = uploadingId === rec.id;
 
                     return (
-                      <div key={rec.id + rec.createdAt} className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col gap-2 shadow-xs">
-                        <p className="text-xs font-mono text-slate-700 break-all">{rec.fileName}</p>
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center justify-between text-[11px] text-slate-500">
-                            <span>Duration: {rec.durationSec}s</span>
-                            {session.role === 'HOST' && rec.uploaded && (
-                              <span className="text-green-600 font-medium">✅ Uploaded to Google Drive</span>
-                            )}
-                          </div>
-                          
-                          <div className="flex gap-1.5 flex-wrap">
-                            {session.role === 'HOST' ? (
-                              <>
-                                <button onClick={() => downloadRecordingPair(rec)}
-                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                                  Download ZIP
-                                </button>
-                                <button onClick={() => shareFile(rec)}
-                                  className="bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                                  Share
-                                </button>
-                                {!rec.uploaded && (
-                                  isUploading ? (
-                                    <span className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md font-medium text-xs flex items-center gap-1 animate-pulse">
-                                      Uploading: {uploadProgress}%
-                                    </span>
-                                  ) : (
-                                    <button onClick={() => handleUploadToDrive(rec)}
-                                      className="bg-purple-50 text-purple-600 border border-purple-200 px-2.5 py-1 rounded-md hover:bg-purple-100 font-medium text-xs cursor-pointer">
-                                      Upload to Drive
-                                    </button>
-                                  )
-                                )}
-                              </>
-                            ) : (
-                              <>
-                                <button onClick={() => downloadRecordingPair(rec)}
-                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md font-medium text-xs cursor-pointer">
-                                  Download ZIP
-                                </button>
-                              </>
-                            )}
-                          </div>
+                      <div key={rec.id + rec.createdAt} className="glass-card-solid p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-mono text-white/70 break-all leading-relaxed flex-1 mr-2">{rec.fileName}</p>
+                          <span className="badge badge-muted shrink-0">{rec.durationSec}s</span>
+                        </div>
+
+                        {session.role === 'HOST' && rec.uploaded && (
+                          <span className="badge badge-success">✓ Uploaded</span>
+                        )}
+
+                        <div className="flex gap-2 flex-wrap">
+                          {session.role === 'HOST' ? (
+                            <>
+                              <button onClick={() => downloadRecordingPair(rec)}
+                                className="btn btn-primary btn-xs">
+                                Download ZIP
+                              </button>
+                              <button onClick={() => shareFile(rec)}
+                                className="btn btn-xs" style={{ background: 'rgba(34, 197, 94, 0.15)', color: 'var(--success)' }}>
+                                WhatsApp
+                              </button>
+                              {!rec.uploaded && (
+                                isUploading ? (
+                                  <div className="flex items-center gap-2">
+                                    <div className="progress-bar w-16">
+                                      <div className="progress-fill" style={{ width: `${uploadProgress}%` }} />
+                                    </div>
+                                    <span className="text-[10px]" style={{ color: 'var(--accent-blue)' }}>{uploadProgress}%</span>
+                                  </div>
+                                ) : (
+                                  <button onClick={() => handleUploadToDrive(rec)}
+                                    className="btn btn-secondary btn-xs">
+                                    Upload Drive
+                                  </button>
+                                )
+                              )}
+                            </>
+                          ) : (
+                            <button onClick={() => downloadRecordingPair(rec)}
+                              className="btn btn-primary btn-xs">
+                              Download ZIP
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -768,7 +795,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
               </div>
             )}
 
-            <p className="text-center text-xs text-slate-400">
+            <p className="text-center text-xs" style={{ color: 'var(--text-muted)' }}>
               {session.myDeviceId} · {session.myLanguage} · {session.myGender}
             </p>
           </>

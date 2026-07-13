@@ -38,23 +38,26 @@ export default function SetupPage() {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        {/* Header */}
+    <div className="min-h-screen flex flex-col items-center justify-center p-5" style={{ background: 'var(--bg-primary)' }}>
+      <div className="w-full max-w-md fade-in">
+        {/* Logo */}
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-slate-900">Biswas Tech</h1>
-          <p className="text-slate-500 text-sm mt-1">Dual Recording Studio</p>
+          <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center text-2xl font-extrabold text-white" style={{ background: 'var(--accent-gradient)' }}>
+            BT
+          </div>
+          <h1 className="text-2xl font-bold text-white">Biswas Tech</h1>
+          <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Dual Recording Studio</p>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-5">
+        <div className="glass-card p-6 space-y-6">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Welcome! Set up your profile</h2>
-            <p className="text-slate-500 text-sm mt-1">This is saved on your device and used in recording file names.</p>
+            <h2 className="text-lg font-semibold text-white">Set up your profile</h2>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Saved locally on your device for recording file names.</p>
           </div>
 
           {/* Name */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Your Name</label>
+            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Your Name</label>
             <input
               type="text"
               value={name}
@@ -63,24 +66,19 @@ export default function SetupPage() {
               placeholder="Enter your full name"
               maxLength={40}
               autoFocus
-              className="w-full border border-slate-300 rounded-lg px-4 py-3 text-slate-900 placeholder-slate-400 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="input-dark"
             />
           </div>
 
           {/* Gender */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Gender</label>
+            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Gender</label>
             <div className="grid grid-cols-2 gap-3">
               {(['MALE', 'FEMALE'] as Gender[]).map((g) => (
                 <button
                   key={g}
                   onClick={() => setGender(g)}
-                  className={[
-                    'py-3 rounded-xl border-2 font-medium text-sm transition-all',
-                    gender === g
-                      ? 'border-blue-500 bg-blue-50 text-blue-700'
-                      : 'border-slate-200 text-slate-600 hover:border-slate-300',
-                  ].join(' ')}
+                  className={`gender-toggle ${gender === g ? 'active' : ''}`}
                 >
                   {g === 'MALE' ? '♂ Male' : '♀ Female'}
                 </button>
@@ -90,11 +88,11 @@ export default function SetupPage() {
 
           {/* Language */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Language</label>
+            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Language</label>
             <select
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-4 py-3 text-slate-900 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 bg-white"
+              className="select-dark"
             >
               <option value="">Select your language</option>
               {LANGUAGES.map((l) => (
@@ -107,11 +105,20 @@ export default function SetupPage() {
           <button
             onClick={handleContinue}
             disabled={!canContinue || saving}
-            className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-sm transition-colors"
+            className="btn btn-primary w-full text-base disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {saving ? 'Saving…' : 'Continue →'}
+            {saving ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                Setting up…
+              </>
+            ) : 'Continue →'}
           </button>
         </div>
+
+        <p className="text-center text-xs mt-6" style={{ color: 'var(--text-muted)' }}>
+          Microphone access is required to continue
+        </p>
       </div>
     </div>
   );
