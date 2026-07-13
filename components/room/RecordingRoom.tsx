@@ -207,11 +207,10 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     const nativeSampleRate = cap.ctx.sampleRate;
 
     const localMerged = mergeChunks(cap.localChunks);
-    const localResampled = downsampleBuffer(localMerged, nativeSampleRate, 16000);
-    const localWav = encodeWav(localResampled, 16000);
+    const localWav = encodeWav(localMerged, nativeSampleRate);
 
     const remoteWav = cap.remoteChunks.length > 0
-      ? encodeWav(downsampleBuffer(mergeChunks(cap.remoteChunks), nativeSampleRate, 16000), 16000)
+      ? encodeWav(mergeChunks(cap.remoteChunks), nativeSampleRate)
       : new Blob([], { type: 'audio/wav' });
 
     // Calculate dynamic sequence naming and build output filenames
