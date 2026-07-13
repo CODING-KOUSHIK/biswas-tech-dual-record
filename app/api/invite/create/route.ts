@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     const code = randomCode(8);
-    const pairId = randomCode(5, '0123456789');
+    const pairId = randomCode(6, 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789');
     const roomId = `btd_${pairId}`;
 
     const invite: InviteRecord = {
