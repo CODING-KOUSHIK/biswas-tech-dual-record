@@ -20,6 +20,7 @@ export interface RecordingRecord extends RecordingMeta {
   id: string;       // `${pairId}_${role}`
   localBlob: Blob;  // own microphone WAV
   remoteBlob: Blob; // partner audio WAV
+  uploaded?: boolean; // Track if uploaded to Google Drive
 }
 
 interface BTDSchema extends DBSchema {
@@ -64,6 +65,15 @@ export async function getRecording(id: string): Promise<RecordingRecord | undefi
 export async function deleteRecording(id: string): Promise<void> {
   const db = await getDB();
   await db.delete('recordings', id);
+}
+
+export async function markRecordingAsUploaded(id: string): Promise<void> {
+  const db = await getDB();
+  const rec = await db.get('recordings', id);
+  if (rec) {
+    rec.uploaded = true;
+    await db.put('recordings', rec);
+  }
 }
 
 export async function getRecordingSequence(currentPairId: string): Promise<{ pairSeq: number; recSeq: number }> {

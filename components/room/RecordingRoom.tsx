@@ -16,9 +16,9 @@ import {
   DisconnectReason,
   RemoteTrack,
 } from 'livekit-client';
-import { encodeWav, mergeChunks } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord } from '@/lib/db';
-import { downloadRecordingPair } from '@/lib/zip';
+import { encodeWav, mergeChunks, downsampleBuffer } from '@/lib/wav';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord, markRecordingAsUploaded } from '@/lib/db';
+import { downloadRecordingPair, getIndividualFilenames, getRecordingZipBlob } from '@/lib/zip';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import JSZip from 'jszip';
 
@@ -55,6 +55,7 @@ interface AudioCapture {
 export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Props) {
   const router = useRouter();
   const { acquire: acquireWakeLock, release: releaseWakeLock } = useWakeLock();
+  const driveLink = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_LINK;
 
   const roomRef = useRef<Room | null>(null);
   const captureRef = useRef<AudioCapture | null>(null);
@@ -81,6 +82,8 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // Saved recordings in the current session
   const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
 
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -121,7 +124,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       if (!localMicTrack) {
         console.warn('[Room] LiveKit local mic track not found. Using fallback getUserMedia.');
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { sampleRate: 44100, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
         });
         localMicTrack = stream.getAudioTracks()[0];
         isFallback = true;
@@ -131,7 +134,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       const localStream = new MediaStream([localMicTrack]);
       localStreamRef.current = localStream;
 
-      const ctx = new AudioContext({ sampleRate: 44100 });
+      const ctx = new AudioContext(); // Use native hardware sample rate to avoid resampler clicking noises
       const localChunks: Float32Array[] = [];
       const remoteChunks: Float32Array[] = [];
       const bufSize = 4096;
@@ -200,9 +203,14 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     captureRef.current = null;
 
     const durationSec = Math.round((Date.now() - cap.startTime) / 1000);
-    const localWav = encodeWav(mergeChunks(cap.localChunks));
+    const nativeSampleRate = cap.ctx.sampleRate;
+
+    const localMerged = mergeChunks(cap.localChunks);
+    const localResampled = downsampleBuffer(localMerged, nativeSampleRate, 16000);
+    const localWav = encodeWav(localResampled, 16000);
+
     const remoteWav = cap.remoteChunks.length > 0
-      ? encodeWav(mergeChunks(cap.remoteChunks))
+      ? encodeWav(downsampleBuffer(mergeChunks(cap.remoteChunks), nativeSampleRate, 16000), 16000)
       : new Blob([], { type: 'audio/wav' });
 
     // Calculate dynamic sequence naming and build output filenames
@@ -262,8 +270,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       audioCaptureDefaults: {
         echoCancellation: true,
         noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: 44100,
+        autoGainControl: false, // Prevents phone from boosting distant room noise
       },
     };
 
@@ -519,6 +526,99 @@ Files:
     window.open(`https://api.whatsapp.com/send?phone=919093647448&text=${encodeURIComponent(text)}`, '_blank');
   };
 
+  const downloadSingleBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 5000);
+  };
+
+  const handleUploadToDrive = async (rec: RecordingRecord) => {
+    const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbzVi_ocA-WRgWpN5RFv26JX3doyYTYAh8eMCq6gK8RcYq8rNnkzk2_gaUV3mEOX5ow3/exec";
+
+    try {
+      setUploadingId(rec.id);
+      setUploadProgress(0);
+
+      const { hostName, guestName, hostBlob, guestBlob } = getIndividualFilenames(rec);
+
+      const toBase64 = (blob: Blob): Promise<string> => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.onerror = () => reject(new Error("Failed to read file"));
+          reader.readAsDataURL(blob);
+        });
+      };
+
+      const [hostBase64, guestBase64] = await Promise.all([
+        toBase64(hostBlob),
+        toBase64(guestBlob)
+      ]);
+
+      const payload = JSON.stringify({
+        files: [
+          { filename: hostName, mimeType: 'audio/wav', base64: hostBase64 },
+          { filename: guestName, mimeType: 'audio/wav', base64: guestBase64 }
+        ]
+      });
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', scriptUrl, true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          setUploadProgress(percent);
+        }
+      };
+
+      xhr.onload = async () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            if (res.success) {
+              // Save to IndexedDB as uploaded
+              await markRecordingAsUploaded(rec.id);
+              // Force reload of recordings
+              setRecCount((c) => c + 1);
+              alert("Audio files uploaded successfully to Google Drive!");
+            } else {
+              alert(`Upload failed: ${res.error || 'Unknown error'}`);
+            }
+          } catch {
+            // Apps Script redirects or empty responses can happen, but if status is 200, try to mark as uploaded
+            await markRecordingAsUploaded(rec.id);
+            setRecCount((c) => c + 1);
+            alert("Audio files upload request sent to Google Drive!");
+          }
+        } else {
+          alert(`Upload failed with server status: ${xhr.status}`);
+        }
+        setUploadingId(null);
+      };
+
+      xhr.onerror = () => {
+        alert("Network error occurred during upload.");
+        setUploadingId(null);
+      };
+
+      xhr.send(payload);
+
+    } catch (err) {
+      alert("Error preparing files for upload: " + String(err));
+      setUploadingId(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white flex flex-col">
       {/* Header */}
@@ -663,25 +763,67 @@ Files:
             {currentRecordings.length > 0 && (
               <div className="w-full border-t border-slate-200 pt-4 mt-2 space-y-2">
                 <h3 className="font-semibold text-slate-800 text-sm">Saved Recordings this Session:</h3>
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                  {currentRecordings.map((rec) => (
-                    <div key={rec.id + rec.createdAt} className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col gap-2 shadow-xs">
-                      <p className="text-xs font-mono text-slate-700 break-all">{rec.fileName}</p>
-                      <div className="flex items-center justify-between text-xs text-slate-500">
-                        <span>Duration: {rec.durationSec}s</span>
-                        <div className="flex gap-2">
-                          <button onClick={() => downloadRecordingPair(rec)}
-                            className="bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-md hover:bg-blue-100 font-medium cursor-pointer">
-                            Download
-                          </button>
-                          <button onClick={() => shareFile(rec)}
-                            className="bg-green-50 text-green-600 border border-green-200 px-2.5 py-1 rounded-md hover:bg-green-100 font-medium flex items-center gap-1 cursor-pointer">
-                            Share (WhatsApp)
-                          </button>
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {currentRecordings.map((rec) => {
+                    const { hostName, guestName, hostBlob, guestBlob } = getIndividualFilenames(rec);
+                    const isUploading = uploadingId === rec.id;
+
+                    return (
+                      <div key={rec.id + rec.createdAt} className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col gap-2 shadow-xs">
+                        <p className="text-xs font-mono text-slate-700 break-all">{rec.fileName}</p>
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center justify-between text-[11px] text-slate-500">
+                            <span>Duration: {rec.durationSec}s</span>
+                            {session.role === 'HOST' && rec.uploaded && (
+                              <span className="text-green-600 font-medium">✅ Uploaded to Google Drive</span>
+                            )}
+                          </div>
+                          
+                          <div className="flex gap-1.5 flex-wrap">
+                            {session.role === 'HOST' ? (
+                              <>
+                                <button onClick={() => downloadSingleBlob(hostBlob, hostName)}
+                                  className="bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-md hover:bg-blue-100 font-medium text-xs cursor-pointer">
+                                  Download Host
+                                </button>
+                                <button onClick={() => downloadSingleBlob(guestBlob, guestName)}
+                                  className="bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-md hover:bg-blue-100 font-medium text-xs cursor-pointer">
+                                  Download Guest
+                                </button>
+                                <button onClick={() => downloadRecordingPair(rec)}
+                                  className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded-md hover:bg-indigo-100 font-medium text-xs cursor-pointer">
+                                  Download ZIP
+                                </button>
+                                <button onClick={() => shareFile(rec)}
+                                  className="bg-green-50 text-green-600 border border-green-200 px-2 py-0.5 rounded-md hover:bg-green-100 font-medium text-xs cursor-pointer">
+                                  Share
+                                </button>
+                                {!rec.uploaded && (
+                                  isUploading ? (
+                                    <span className="bg-purple-50 text-purple-600 border border-purple-200 px-2 py-0.5 rounded-md font-medium text-xs flex items-center gap-1 animate-pulse">
+                                      Uploading: {uploadProgress}%
+                                    </span>
+                                  ) : (
+                                    <button onClick={() => handleUploadToDrive(rec)}
+                                      className="bg-purple-50 text-purple-600 border border-purple-200 px-2 py-0.5 rounded-md hover:bg-purple-100 font-medium text-xs cursor-pointer">
+                                      Upload to Drive
+                                    </button>
+                                  )
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <button onClick={() => downloadSingleBlob(guestBlob, guestName)}
+                                  className="bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-md hover:bg-blue-100 font-medium text-xs cursor-pointer">
+                                  Download Your Voice
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

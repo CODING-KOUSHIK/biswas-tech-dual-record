@@ -5,8 +5,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { loadProfile, clearProfile } from '@/lib/profile';
 import { getDeviceId } from '@/lib/device';
-import { getAllRecordings, deleteRecording, RecordingRecord } from '@/lib/db';
-import { downloadRecordingPair, downloadAllRecordings } from '@/lib/zip';
+import { getAllRecordings, deleteRecording, RecordingRecord, markRecordingAsUploaded } from '@/lib/db';
+import { downloadRecordingPair, downloadAllRecordings, getIndividualFilenames, getRecordingZipBlob } from '@/lib/zip';
 
 type Gender = 'MALE' | 'FEMALE';
 type View = 'home' | 'invite' | 'recordings';
@@ -41,6 +41,10 @@ export default function HomePage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [downloadingAll, setDownloadingAll] = useState(false);
 
+  const driveLink = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_LINK;
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+
   useEffect(() => {
     const p = loadProfile();
     if (!p) { router.replace('/setup'); return; }
@@ -58,6 +62,101 @@ export default function HomePage() {
       });
     }
   }, [view]);
+
+  const downloadSingleBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 5000);
+  };
+
+  const handleUploadToDrive = async (rec: RecordingRecord) => {
+    const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbzVi_ocA-WRgWpN5RFv26JX3doyYTYAh8eMCq6gK8RcYq8rNnkzk2_gaUV3mEOX5ow3/exec";
+
+    try {
+      setUploadingId(rec.id);
+      setUploadProgress(0);
+
+      const { hostName, guestName, hostBlob, guestBlob } = getIndividualFilenames(rec);
+
+      const toBase64 = (blob: Blob): Promise<string> => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.onerror = () => reject(new Error("Failed to read file"));
+          reader.readAsDataURL(blob);
+        });
+      };
+
+      const [hostBase64, guestBase64] = await Promise.all([
+        toBase64(hostBlob),
+        toBase64(guestBlob)
+      ]);
+
+      const payload = JSON.stringify({
+        files: [
+          { filename: hostName, mimeType: 'audio/wav', base64: hostBase64 },
+          { filename: guestName, mimeType: 'audio/wav', base64: guestBase64 }
+        ]
+      });
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', scriptUrl, true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          setUploadProgress(percent);
+        }
+      };
+
+      xhr.onload = async () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            if (res.success) {
+              // Save to IndexedDB as uploaded
+              await markRecordingAsUploaded(rec.id);
+              // Reload list
+              const recs = await getAllRecordings();
+              setRecordings(recs);
+              alert("Audio files uploaded successfully to Google Drive!");
+            } else {
+              alert(`Upload failed: ${res.error || 'Unknown error'}`);
+            }
+          } catch {
+            // Apps Script redirects or empty responses can happen, but if status is 200, try to mark as uploaded
+            await markRecordingAsUploaded(rec.id);
+            const recs = await getAllRecordings();
+            setRecordings(recs);
+            alert("Audio files upload request sent to Google Drive!");
+          }
+        } else {
+          alert(`Upload failed with server status: ${xhr.status}`);
+        }
+        setUploadingId(null);
+      };
+
+      xhr.onerror = () => {
+        alert("Network error occurred during upload.");
+        setUploadingId(null);
+      };
+
+      xhr.send(payload);
+
+    } catch (err) {
+      alert("Error preparing files for upload: " + String(err));
+      setUploadingId(null);
+    }
+  };
 
   const handleGenerateInvite = async () => {
     if (!profile || generating) return;
@@ -273,16 +372,59 @@ export default function HomePage() {
                       <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{rec.role}</span>
                       <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{rec.language}</span>
                       <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{formatDuration(rec.durationSec)}</span>
+                      {rec.role === 'HOST' && rec.uploaded && (
+                        <span className="text-[11px] bg-green-50 text-green-600 px-2 py-0.5 rounded-full font-medium border border-green-200">✅ Uploaded</span>
+                      )}
                     </div>
                     <p className="text-xs text-slate-400 mt-1.5">Partner: {rec.partnerName} ({rec.partnerGender})</p>
                   </div>
-                  <div className="flex flex-col gap-2 shrink-0">
-                    <button onClick={() => downloadRecordingPair(rec)}
-                      className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-medium">
-                      Download
-                    </button>
+                  <div className="flex flex-col gap-1.5 shrink-0 w-28">
+                    {rec.role === 'HOST' ? (
+                      <>
+                        <button onClick={() => {
+                          const { hostName, hostBlob } = getIndividualFilenames(rec);
+                          downloadSingleBlob(hostBlob, hostName);
+                        }}
+                          className="text-[11px] bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2 py-1 rounded-lg font-medium cursor-pointer">
+                          Download Host
+                        </button>
+                        <button onClick={() => {
+                          const { guestName, guestBlob } = getIndividualFilenames(rec);
+                          downloadSingleBlob(guestBlob, guestName);
+                        }}
+                          className="text-[11px] bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2 py-1 rounded-lg font-medium cursor-pointer">
+                          Download Guest
+                        </button>
+                        <button onClick={() => downloadRecordingPair(rec)}
+                          className="text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg font-medium cursor-pointer">
+                          Download ZIP
+                        </button>
+                        {!rec.uploaded && (
+                          uploadingId === rec.id ? (
+                            <span className="text-[11px] bg-purple-50 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium text-center animate-pulse">
+                              {uploadProgress}%
+                            </span>
+                          ) : (
+                            <button onClick={() => handleUploadToDrive(rec)}
+                              className="text-[11px] bg-purple-50 hover:bg-purple-100 text-purple-600 border border-purple-200 px-2 py-1 rounded-lg font-medium cursor-pointer">
+                              Upload Drive
+                            </button>
+                          )
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <button onClick={() => {
+                          const { guestName, guestBlob } = getIndividualFilenames(rec);
+                          downloadSingleBlob(guestBlob, guestName);
+                        }}
+                          className="text-[11px] bg-blue-600 hover:bg-blue-700 text-white px-2 py-1.5 rounded-lg font-medium cursor-pointer">
+                          Download Voice
+                        </button>
+                      </>
+                    )}
                     <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
-                      className="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg font-medium border border-red-200 disabled:opacity-50">
+                      className="text-[11px] bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1 rounded-lg font-medium border border-red-200 disabled:opacity-50 cursor-pointer">
                       {deletingId === rec.id ? '…' : 'Delete'}
                     </button>
                   </div>
