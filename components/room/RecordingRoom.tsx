@@ -1,6 +1,6 @@
 'use client';
 // components/room/RecordingRoom.tsx
-// Core room component with audio loopback silencing & Host/Guest sync controls
+// Core room component with single-mic hardware capture & Host/Guest sync controls
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -59,6 +59,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const localStreamRef = useRef<MediaStream | null>(null);
   const connectedRef = useRef(false);
   const partnerDeviceIdRef = useRef<string>('unknown');
+  const isLocalStreamFallbackRef = useRef<boolean>(false);
 
   const [connState, setConnState] = useState<ConnState>('connecting');
   const [errorMsg, setErrorMsg] = useState('');
@@ -100,9 +101,29 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     if (!room) return;
 
     try {
-      const localStream = await navigator.mediaDevices.getUserMedia({
-        audio: { sampleRate: 44100, channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
+      // 1. Get mic track from LiveKit to avoid opening the mic twice (prevents clicks/"bod bod" sound)
+      let localMicTrack: MediaStreamTrack | null = null;
+      let isFallback = false;
+
+      for (const pub of room.localParticipant.trackPublications.values()) {
+        if (pub.kind === Track.Kind.Audio && pub.track && pub.track.mediaStreamTrack) {
+          localMicTrack = pub.track.mediaStreamTrack;
+          break;
+        }
+      }
+
+      // Fallback only if LiveKit mic is not found (should not happen)
+      if (!localMicTrack) {
+        console.warn('[Room] LiveKit local mic track not found. Using fallback getUserMedia.');
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { sampleRate: 44100, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        });
+        localMicTrack = stream.getAudioTracks()[0];
+        isFallback = true;
+      }
+
+      isLocalStreamFallbackRef.current = isFallback;
+      const localStream = new MediaStream([localMicTrack]);
       localStreamRef.current = localStream;
 
       const ctx = new AudioContext({ sampleRate: 44100 });
@@ -110,12 +131,12 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       const remoteChunks: Float32Array[] = [];
       const bufSize = 4096;
 
-      // CRITICAL FIX: Connect script processors to a silent gain node to prevent speaker feedback loop
+      // Connect script processors to a silent gain node to prevent speaker feedback loop
       const silence = ctx.createGain();
       silence.gain.value = 0;
       silence.connect(ctx.destination);
 
-      // Local mic
+      // Local mic capture
       const localSrc = ctx.createMediaStreamSource(localStream);
       const localProc = ctx.createScriptProcessor(bufSize, 1, 1);
       localProc.onaudioprocess = (e) => localChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
@@ -165,7 +186,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     cap.localProc.disconnect();
     cap.remoteProc?.disconnect();
     await cap.ctx.close();
-    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+
+    // CRITICAL: Only stop fallback stream tracks. Keep LiveKit mic track active for voice call.
+    if (isLocalStreamFallbackRef.current) {
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    }
     localStreamRef.current = null;
     captureRef.current = null;
 
