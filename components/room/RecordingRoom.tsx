@@ -461,60 +461,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   };
 
   // ─── WHATSAPP SHARE ZIP HELPER ───────────────────────────────────────────
-  const shareFile = async (rec: RecordingRecord) => {
-    const zip = new JSZip();
-    const f = zip.folder(`Meeting_${rec.pairId}`)!;
-
-    const localName = rec.fileName;
-    const match = rec.fileName.match(/_PAIR(\d+)\s*-\s*(\d+)\(/);
-    const pairPadded = match ? match[1] : '001';
-    const recPadded = match ? match[2] : '001';
-
-    const remoteRole = rec.role === 'HOST' ? 'guest' : 'host';
-    const remoteDeviceId = rec.partnerDeviceId ? rec.partnerDeviceId.toLowerCase() : 'unknown';
-    const remoteGender = rec.partnerGender.toLowerCase();
-    const remoteLanguage = rec.language.toLowerCase();
-    const remoteSpeakerName = rec.partnerName.trim().replace(/\s+/g, '_');
-
-    const remoteName = `${remoteLanguage}_${remoteRole}_${remoteDeviceId}_${remoteGender}_PAIR${pairPadded} - ${recPadded}(${remoteSpeakerName}).wav`;
-
-    f.file(localName, rec.localBlob);
-    f.file(remoteName, rec.remoteBlob);
-
-    const metaText = `Pair ID: ${rec.pairId}
-Date: ${new Date(rec.createdAt).toISOString()}
-Duration: ${rec.durationSec} seconds
-Language: ${rec.language}
-Role: ${rec.role}
-Device ID: ${rec.deviceId}
-Gender: ${rec.gender}
-Partner Name: ${rec.partnerName}
-Partner Gender: ${rec.partnerGender}
-Partner Device ID: ${rec.partnerDeviceId || 'unknown'}
-Files:
-- ${localName}
-- ${remoteName}`;
-
-    f.file('metadata.txt', metaText);
-
-    try {
-      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
-      const zipFile = new File([zipBlob], `Meeting_${rec.pairId}.zip`, { type: 'application/zip' });
-
-      // Check if Web Share API handles ZIP sharing
-      if (navigator.canShare && navigator.canShare({ files: [zipFile] })) {
-        await navigator.share({
-          files: [zipFile],
-          title: `Meeting_${rec.pairId}.zip`,
-          text: `Biswas Tech Dual Recording files for Pair ${rec.pairId}`,
-        });
-        return;
-      }
-    } catch (e) {
-      console.warn('[Room] Web Share failed, falling back to WhatsApp text message:', e);
-    }
-
-    // Fallback: Open WhatsApp direct text message link to +919093647448
+  const shareFile = (rec: RecordingRecord) => {
     const text = `Hi, I have completed the recording for Pair ${rec.pairId}.\n\n` +
       `File: ${rec.fileName}\n` +
       `Duration: ${rec.durationSec}s\n` +
@@ -522,10 +469,9 @@ Files:
       `Role: ${rec.role}\n` +
       `Device ID: ${rec.deviceId}\n` +
       `Gender: ${rec.gender}\n` +
-      `Partner: ${rec.partnerName}\n` +
-      `Partner Device ID: ${rec.partnerDeviceId || 'unknown'}`;
+      `Partner: ${rec.partnerName}`;
 
-    window.open(`https://api.whatsapp.com/send?phone=919093647448&text=${encodeURIComponent(text)}`, '_blank');
+    window.open(`https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`, '_blank');
   };
 
   const downloadSingleBlob = (blob: Blob, fileName: string) => {

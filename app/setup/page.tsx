@@ -18,9 +18,20 @@ export default function SetupPage() {
 
   const canContinue = name.trim().length > 0 && gender !== '' && language !== '';
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (!canContinue || saving) return;
     setSaving(true);
+
+    try {
+      // Prompt for microphone permission immediately
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop()); // close the temporary stream
+    } catch (err) {
+      alert("Microphone permission is required to use this application. Please allow microphone access in your browser settings to continue.");
+      setSaving(false);
+      return;
+    }
+
     getDeviceId(); // initialize device ID
     saveProfile({ name: name.trim(), gender: gender as Gender, language });
     router.replace('/home');

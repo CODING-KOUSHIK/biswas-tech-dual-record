@@ -50,6 +50,15 @@ export default function HomePage() {
     if (!p) { router.replace('/setup'); return; }
     setProfile(p);
     setDeviceId(getDeviceId());
+
+    // Prompt for microphone permission on landing
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then((stream) => {
+        stream.getTracks().forEach((track) => track.stop()); // close the temporary stream
+      })
+      .catch((err) => {
+        alert("Microphone permission is required to use this application. Please allow microphone access in your browser settings to continue.");
+      });
   }, [router]);
 
   // Load recordings when switching to that view
