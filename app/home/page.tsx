@@ -1,10 +1,10 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { loadProfile, clearProfile } from '@/lib/profile';
+import { loadProfile } from '@/lib/profile';
 import { getDeviceId } from '@/lib/device';
-import { getAllRecordings, deleteRecording, RecordingRecord, markRecordingAsUploaded } from '@/lib/db';
-import { downloadRecordingPair, downloadAllRecordings, getIndividualFilenames } from '@/lib/zip';
+import { getAllRecordings, deleteRecording, RecordingRecord } from '@/lib/db';
+import { downloadRecordingPair } from '@/lib/zip';
 
 type Gender = 'MALE' | 'FEMALE';
 type View = 'home' | 'invite' | 'recordings';
@@ -29,9 +29,6 @@ export default function HomePage() {
   const [recordings, setRecordings] = useState<RecordingRecord[]>([]);
   const [loadingRecs, setLoadingRecs] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [downloadingAll, setDownloadingAll] = useState(false);
-  const [uploadingId, setUploadingId] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
@@ -51,37 +48,7 @@ export default function HomePage() {
     }
   }, [view]);
 
-  const handleUploadToDrive = async (rec: RecordingRecord) => {
-    const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbzVi_ocA-WRgWpN5RFv26JX3doyYTYAh8eMCq6gK8RcYq8rNnkzk2_gaUV3mEOX5ow3/exec";
-    try {
-      setUploadingId(rec.id); setUploadProgress(0);
-      const { hostName, guestName, hostBlob, guestBlob } = getIndividualFilenames(rec);
-      const toB64 = (b: Blob): Promise<string> => new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res((r.result as string).split(',')[1]);
-        r.onerror = () => rej(new Error("Read fail"));
-        r.readAsDataURL(b);
-      });
-      const [hb, gb] = await Promise.all([toB64(hostBlob), toB64(guestBlob)]);
-      const payload = JSON.stringify({ files: [
-        { filename: hostName, mimeType: 'audio/wav', base64: hb },
-        { filename: guestName, mimeType: 'audio/wav', base64: gb }
-      ]});
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', scriptUrl, true);
-      xhr.setRequestHeader('Content-Type', 'application/json');
-      xhr.upload.onprogress = (e) => { if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100)); };
-      xhr.onload = async () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try { const r = JSON.parse(xhr.responseText); if (r.success) { await markRecordingAsUploaded(rec.id); const recs = await getAllRecordings(); setRecordings(recs); alert("Uploaded!"); } else alert(`Failed: ${r.error}`); }
-          catch { await markRecordingAsUploaded(rec.id); const recs = await getAllRecordings(); setRecordings(recs); alert("Upload sent!"); }
-        } else alert(`Failed: ${xhr.status}`);
-        setUploadingId(null);
-      };
-      xhr.onerror = () => { alert("Network error."); setUploadingId(null); };
-      xhr.send(payload);
-    } catch (err) { alert("Error: " + String(err)); setUploadingId(null); }
-  };
+
 
   const handleGenerateInvite = async () => {
     if (!profile || generating) return;
@@ -112,10 +79,7 @@ export default function HomePage() {
     setRecordings(p => p.filter(r => r.id !== id)); setDeletingId(null);
   };
 
-  const handleDownloadAll = async () => {
-    if (recordings.length === 0) return;
-    setDownloadingAll(true); await downloadAllRecordings(recordings).catch(console.error); setDownloadingAll(false);
-  };
+
 
   const handleReset = () => {
     if (!confirm('Delete ALL recordings and reset profile? This cannot be undone.')) return;
@@ -170,15 +134,7 @@ export default function HomePage() {
           </div>
         </button>
 
-        {/* Download All Card */}
-        <button onClick={() => { setView('recordings'); setTimeout(() => handleDownloadAll(), 300); }}
-          className="w-full bg-[#1e293b] border border-white/[0.06] rounded-2xl p-6 text-left active:scale-[0.98] transition-all flex flex-col justify-between h-36">
-          <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-xl">📦</div>
-          <div>
-            <h2 className="text-xl font-extrabold text-white">Download All</h2>
-            <p className="text-slate-400 text-[13px] mt-1 font-medium">Batch download all session ZIP archives</p>
-          </div>
-        </button>
+
       </main>
     </div>
   );
@@ -264,12 +220,7 @@ export default function HomePage() {
             <button onClick={() => setView('home')} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-xl flex items-center justify-center text-slate-400 text-base font-bold active:scale-95 transition-transform">←</button>
             <h1 className="text-[18px] font-bold">Recordings</h1>
           </div>
-          {recordings.length > 0 && (
-            <button onClick={handleDownloadAll} disabled={downloadingAll}
-              className="text-[13px] bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold disabled:opacity-50 active:scale-95 transition-transform">
-              {downloadingAll ? '…' : '📦 All ZIP'}
-            </button>
-          )}
+
         </div>
       </header>
 
@@ -307,21 +258,8 @@ export default function HomePage() {
                     className="h-12 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5 col-span-2">
                     Download ZIP
                   </button>
-                  {rec.role === 'HOST' && !rec.uploaded && (
-                    uploadingId === rec.id ? (
-                      <div className="h-12 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center gap-2 col-span-2">
-                        <div className="progress-bar w-24"><div className="progress-fill" style={{ width: `${uploadProgress}%` }} /></div>
-                        <span className="text-[12px] text-indigo-400 font-mono font-bold">{uploadProgress}%</span>
-                      </div>
-                    ) : (
-                      <button onClick={() => handleUploadToDrive(rec)}
-                        className="h-12 bg-[#1e293b] hover:bg-slate-750 text-slate-350 border border-slate-750 rounded-xl font-semibold text-[13px] active:scale-95 transition-transform flex items-center justify-center">
-                        Upload to Drive
-                      </button>
-                    )
-                  )}
                   <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
-                    className={`h-12 text-red-400 bg-red-500/15 hover:bg-red-500/25 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center ${rec.role !== 'HOST' || rec.uploaded ? 'col-span-2' : ''}`}>
+                    className="h-12 text-red-400 bg-red-500/15 hover:bg-red-500/25 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center col-span-2">
                     {deletingId === rec.id ? '…' : 'Delete'}
                   </button>
                 </div>

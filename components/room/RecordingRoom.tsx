@@ -17,10 +17,9 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, mergeChunks, downsampleBuffer } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord, markRecordingAsUploaded } from '@/lib/db';
-import { downloadRecordingPair, getIndividualFilenames, getRecordingZipBlob } from '@/lib/zip';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord } from '@/lib/db';
+import { downloadRecordingPair, getRecordingZipBlob } from '@/lib/zip';
 import { useWakeLock } from '@/hooks/useWakeLock';
-import JSZip from 'jszip';
 
 interface Session {
   myName: string;
@@ -83,8 +82,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // Saved recordings in the current session
   const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
-  const [uploadingId, setUploadingId] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<number>(0);
 
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -461,7 +458,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   };
 
   // ─── WHATSAPP SHARE ZIP HELPER ───────────────────────────────────────────
-  const shareFile = (rec: RecordingRecord) => {
+  const shareFile = async (rec: RecordingRecord) => {
     const text = `Hi, I have completed the recording for Pair ${rec.pairId}.\n\n` +
       `File: ${rec.fileName}\n` +
       `Duration: ${rec.durationSec}s\n` +
@@ -471,6 +468,32 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       `Gender: ${rec.gender}\n` +
       `Partner: ${rec.partnerName}`;
 
+    try {
+      const { blob, filename } = await getRecordingZipBlob(rec);
+      const file = new File([blob], filename, { type: 'application/zip' });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: filename,
+          text: text
+        });
+        return;
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
+      console.error('Web Share failed, falling back:', err);
+    }
+
+    // Fallback: download the file and open the WhatsApp link
+    alert("Direct file sharing is not supported by your browser. The file will be downloaded, and WhatsApp will open to share the details.");
+    try {
+      await downloadRecordingPair(rec);
+    } catch (err) {
+      console.error('Fallback download failed:', err);
+    }
     window.open(`https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`, '_blank');
   };
 
@@ -488,84 +511,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     }, 5000);
   };
 
-  const handleUploadToDrive = async (rec: RecordingRecord) => {
-    const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbzVi_ocA-WRgWpN5RFv26JX3doyYTYAh8eMCq6gK8RcYq8rNnkzk2_gaUV3mEOX5ow3/exec";
 
-    try {
-      setUploadingId(rec.id);
-      setUploadProgress(0);
-
-      const { hostName, guestName, hostBlob, guestBlob } = getIndividualFilenames(rec);
-
-      const toBase64 = (blob: Blob): Promise<string> => {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-          reader.onerror = () => reject(new Error("Failed to read file"));
-          reader.readAsDataURL(blob);
-        });
-      };
-
-      const [hostBase64, guestBase64] = await Promise.all([
-        toBase64(hostBlob),
-        toBase64(guestBlob)
-      ]);
-
-      const payload = JSON.stringify({
-        files: [
-          { filename: hostName, mimeType: 'audio/wav', base64: hostBase64 },
-          { filename: guestName, mimeType: 'audio/wav', base64: guestBase64 }
-        ]
-      });
-
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', scriptUrl, true);
-      xhr.setRequestHeader('Content-Type', 'application/json');
-
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const percent = Math.round((e.loaded / e.total) * 100);
-          setUploadProgress(percent);
-        }
-      };
-
-      xhr.onload = async () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const res = JSON.parse(xhr.responseText);
-            if (res.success) {
-              // Save to IndexedDB as uploaded
-              await markRecordingAsUploaded(rec.id);
-              // Force reload of recordings
-              setRecCount((c) => c + 1);
-              alert("Audio files uploaded successfully to Google Drive!");
-            } else {
-              alert(`Upload failed: ${res.error || 'Unknown error'}`);
-            }
-          } catch {
-            // Apps Script redirects or empty responses can happen, but if status is 200, try to mark as uploaded
-            await markRecordingAsUploaded(rec.id);
-            setRecCount((c) => c + 1);
-            alert("Audio files upload request sent to Google Drive!");
-          }
-        } else {
-          alert(`Upload failed with server status: ${xhr.status}`);
-        }
-        setUploadingId(null);
-      };
-
-      xhr.onerror = () => {
-        alert("Network error occurred during upload.");
-        setUploadingId(null);
-      };
-
-      xhr.send(payload);
-
-    } catch (err) {
-      alert("Error preparing files for upload: " + String(err));
-      setUploadingId(null);
-    }
-  };
 
   return (
     <div className="min-h-screen flex flex-col bg-[#0f172a]">
@@ -744,8 +690,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                 <h3 className="font-bold text-[14px] text-slate-450">Session Recordings</h3>
                 <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
                   {currentRecordings.map((rec) => {
-                    const isUploading = uploadingId === rec.id;
-
                     return (
                       <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
                         <div className="flex items-center justify-between">
@@ -767,19 +711,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                               className="h-11 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center">
                               WhatsApp
                             </button>
-                          )}
-                          {session.role === 'HOST' && !rec.uploaded && (
-                            isUploading ? (
-                              <div className="h-11 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center gap-2 col-span-2">
-                                <div className="progress-bar w-20"><div className="progress-fill" style={{ width: `${uploadProgress}%` }} /></div>
-                                <span className="text-[11px] text-indigo-400 font-mono font-bold">{uploadProgress}%</span>
-                              </div>
-                            ) : (
-                              <button onClick={() => handleUploadToDrive(rec)}
-                                className="h-11 bg-slate-800 hover:bg-slate-750 text-slate-300 border border-white/[0.06] rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center col-span-2">
-                                Upload to Drive
-                              </button>
-                            )
                           )}
                         </div>
                       </div>
