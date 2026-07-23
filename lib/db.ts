@@ -34,8 +34,11 @@ let dbPromise: Promise<IDBPDatabase<BTDSchema>> | null = null;
 
 function getDB() {
   if (!dbPromise) {
-    dbPromise = openDB<BTDSchema>('btd-recordings', 2, {
+    dbPromise = openDB<BTDSchema>('btd-recordings', 3, {
       upgrade(db) {
+        if (db.objectStoreNames.contains('recordings')) {
+          db.deleteObjectStore('recordings');
+        }
         const store = db.createObjectStore('recordings', { keyPath: 'id' });
         store.createIndex('by_pairId', 'pairId');
         store.createIndex('by_createdAt', 'createdAt');

@@ -640,44 +640,18 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const shareFile = async (rec: RecordingRecord) => {
     try {
       const text = `Hi, I have completed the recording for Pair ${rec.pairId} (${rec.role === 'HOST' ? 'Host' : 'Guest'}).\n\n` +
-        `File: ${rec.fileName}`;
+        `File: ${rec.fileName}\n\n` +
+        `*Please attach the downloaded WAV file as a Document to preserve its audio format.*`;
 
       const whatsappUrl = `https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`;
 
-      // 1. Synchronously check if native Web Share is supported
-      const isWebShareSupported = typeof navigator.share !== 'undefined';
-
-      if (!isWebShareSupported) {
-        // Open the WhatsApp window synchronously to prevent popup blocker
-        window.open(whatsappUrl, '_blank');
-      }
-
-      // 2. Download the WAV file
+      // 1. Download the WAV file locally so user can select it
       downloadSingleBlob(rec.blob, rec.fileName);
 
-      // 3. Share the file in WhatsApp (using Web Share API if supported)
-      if (isWebShareSupported) {
-        try {
-          const file = new File([rec.blob], rec.fileName, { type: 'audio/wav' });
-
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({
-              files: [file],
-              title: rec.fileName,
-              text: text
-            });
-            return;
-          }
-        } catch (err) {
-          if (err instanceof Error && err.name === 'AbortError') {
-            return;
-          }
-          console.error('Web Share failed, falling back:', err);
-        }
-
-        // If Web Share API checks failed, open WhatsApp fallback
+      // 2. Open WhatsApp directly to the default user (Bypassing Web Share to prevent AAC conversion)
+      setTimeout(() => {
         window.open(whatsappUrl, '_blank');
-      }
+      }, 500);
     } catch (err) {
       console.error('Share failed:', err);
     }
