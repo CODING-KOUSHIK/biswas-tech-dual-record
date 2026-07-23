@@ -17,7 +17,8 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, encodeStereoWav, mergeChunks, downsampleBuffer } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, markRecordingAsUploaded, RecordingRecord } from '@/lib/db';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, markRecordingAsUploaded, RecordingRecord, deleteRecording } from '@/lib/db';
+import JSZip from 'jszip';
 import { useWakeLock } from '@/hooks/useWakeLock';
 
 interface Session {
@@ -84,8 +85,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // Saved recordings in the current session
   const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [allRecordings, setAllRecordings] = useState<RecordingRecord[]>([]);
+  
+  // Zipping state
+  const [isZipping, setIsZipping] = useState(false);
+  const [zipProgress, setZipProgress] = useState(0);
 
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -261,6 +265,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   // Load recordings in current session on load or update
   useEffect(() => {
     getAllRecordings().then((recs) => {
+      setAllRecordings(recs);
       const filtered = recs.filter((r) => r.pairId === session.pairId);
       setCurrentRecordings(filtered);
     });
@@ -544,57 +549,59 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     sendData({ type: 'NEW_SESSION' });
   };
 
-  // ─── HANDLERS FOR DOWNLOAD & DRIVE UPLOAD ─────────────────────────
+  // ─── HANDLERS FOR DOWNLOAD, DELETE, SHARE & ZIP ─────────────────────────
   const handleDownloadWav = (rec: RecordingRecord) => {
-    if (downloadingId) return;
-    setDownloadingId(rec.id);
-    setDownloadProgress(0);
-
-    const interval = setInterval(() => {
-      setDownloadProgress(p => {
-        if (p >= 100) {
-          clearInterval(interval);
-          return 100;
-        }
-        return p + 20;
-      });
-    }, 150);
-
-    setTimeout(() => {
-      downloadSingleBlob(rec.blob, rec.fileName);
-      setDownloadingId(null);
-      setDownloadProgress(0);
-    }, 800);
+    downloadSingleBlob(rec.blob, rec.fileName);
   };
 
-  // ─── SHARE HELPERS ───────────────────────────────────────────
-  const shareTelegram = async (rec: RecordingRecord) => {
+  const handleDelete = async (rec: RecordingRecord) => {
+    if (isZipping) return;
+    const ok = window.confirm('Are you sure you want to permanently delete this recording?');
+    if (!ok) return;
+    await deleteRecording(rec.id);
+    setRecCount((c) => c + 1); // trigger reload
+  };
+
+  const shareNative = async (rec: RecordingRecord) => {
     try {
-      const telegramUrl = `https://t.me/biswastechx`;
-
-      // 1. Download the WAV file locally so user can select it
-      downloadSingleBlob(rec.blob, rec.fileName);
-
-      // 2. Open Telegram directly to the default user
-      setTimeout(() => {
-        window.open(telegramUrl, '_blank');
-      }, 500);
-    } catch (err) {
-      console.error('Share failed:', err);
+      if (navigator.share) {
+        const file = new File([rec.blob], rec.fileName, { type: 'audio/wav' });
+        await navigator.share({
+          files: [file],
+          title: rec.fileName,
+        });
+      } else {
+        alert('Native sharing is not supported on this browser. Please download the file manually.');
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('Share failed:', err);
+      }
     }
   };
 
-  const shareWhatsApp = async (rec: RecordingRecord) => {
+  const downloadAllZip = async () => {
+    if (allRecordings.length === 0 || isZipping) return;
+    setIsZipping(true);
+    setZipProgress(0);
+
     try {
-      const whatsappUrl = `https://api.whatsapp.com/send?phone=919093847448`;
+      const zip = new JSZip();
+      allRecordings.forEach((rec) => {
+        zip.file(rec.fileName, rec.blob);
+      });
 
-      downloadSingleBlob(rec.blob, rec.fileName);
+      const zipBlob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
+        setZipProgress(Math.floor(metadata.percent));
+      });
 
-      setTimeout(() => {
-        window.open(whatsappUrl, '_blank');
-      }, 500);
+      downloadSingleBlob(zipBlob, `BiswasTech_Recordings_${Date.now()}.zip`);
     } catch (err) {
-      console.error('Share failed:', err);
+      console.error('Failed to create ZIP:', err);
+      alert('Failed to create ZIP file.');
+    } finally {
+      setIsZipping(false);
+      setZipProgress(0);
     }
   };
 
@@ -612,7 +619,31 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     }, 5000);
   };
 
+  const renderRecording = (rec: RecordingRecord) => (
+    <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-mono text-slate-350 break-all leading-relaxed flex-1 mr-3">{rec.fileName}</p>
+        <span className="text-[10px] bg-slate-850 text-slate-450 px-2 py-0.5 rounded-md font-semibold shrink-0">{rec.durationSec}s</span>
+      </div>
 
+      <div className="grid grid-cols-2 gap-2.5 w-full pt-1.5">
+        <button onClick={() => handleDownloadWav(rec)} disabled={isZipping}
+          className={`col-span-2 h-12 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-[14px] font-extrabold text-[14px] shadow-lg shadow-indigo-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 ${isZipping ? 'opacity-50' : ''}`}>
+          <span className="text-[16px]">📥</span> Download WAV
+        </button>
+
+        <button onClick={() => shareNative(rec)} disabled={isZipping}
+          className={`h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm ${isZipping ? 'opacity-50' : ''}`}>
+          <span className="text-[15px]">📤</span> Share
+        </button>
+        
+        <button onClick={() => handleDelete(rec)} disabled={isZipping}
+          className={`h-12 bg-red-500/15 hover:bg-red-500/25 text-red-500 border border-red-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm ${isZipping ? 'opacity-50' : ''}`}>
+          <span className="text-[15px]">🗑️</span> Delete
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen flex flex-col bg-[#0f172a]">
@@ -790,50 +821,25 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
             {/* Session Recordings List */}
             {currentRecordings.length > 0 && (
               <div className="w-full pt-4 mt-2 space-y-3.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                <h3 className="font-bold text-[14px] text-slate-450">Session Recordings</h3>
+                <h3 className="font-bold text-[14px] text-slate-450">Current Session Recordings</h3>
                 <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                  {currentRecordings.map((rec) => {
-                    return (
-                      <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
-                        <div className="flex items-center justify-between">
-                          <p className="text-[11px] font-mono text-slate-350 break-all leading-relaxed flex-1 mr-3">{rec.fileName}</p>
-                          <span className="text-[10px] bg-slate-850 text-slate-450 px-2 py-0.5 rounded-md font-semibold shrink-0">{rec.durationSec}s</span>
-                        </div>
+                  {currentRecordings.map(renderRecording)}
+                </div>
+              </div>
+            )}
 
-                        {rec.uploaded && (
-                          <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2 py-0.5 rounded font-bold inline-block">✓ Uploaded to Google Drive</span>
-                        )}
-
-                        <div className="grid grid-cols-2 gap-2.5 w-full pt-1.5">
-                          <button onClick={() => handleDownloadWav(rec)} disabled={downloadingId !== null}
-                            className={`col-span-2 h-12 rounded-[14px] font-extrabold text-[14px] shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 overflow-hidden relative ${
-                              downloadingId === rec.id ? 'bg-indigo-700 text-white/90 shadow-indigo-500/10' : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white shadow-indigo-500/25'
-                            } ${downloadingId !== null && downloadingId !== rec.id ? 'opacity-50' : ''}`}>
-                            {downloadingId === rec.id ? (
-                              <>
-                                <div className="absolute left-0 top-0 bottom-0 bg-indigo-500 transition-all duration-150 ease-out z-0" style={{ width: `${downloadProgress}%` }}></div>
-                                <span className="relative z-10 flex items-center gap-2">
-                                  <span className="text-[16px] animate-bounce">⏳</span> Downloading {downloadProgress}%
-                                </span>
-                              </>
-                            ) : (
-                              <><span className="text-[16px]">📥</span> Download WAV</>
-                            )}
-                          </button>
-
-                              <button onClick={() => shareTelegram(rec)}
-                                className="h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
-                                <span className="text-[15px]">✈️</span> Telegram
-                              </button>
-                              
-                              <button onClick={() => shareWhatsApp(rec)}
-                                className="h-12 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-500 border border-emerald-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
-                                <span className="text-[15px]">💬</span> WhatsApp
-                              </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+            {/* Previous Recordings List */}
+            {allRecordings.length > 0 && (
+              <div className="w-full pt-4 mt-4 space-y-3.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-[14px] text-slate-450">All Recordings</h3>
+                  <button onClick={downloadAllZip} disabled={isZipping}
+                    className={`px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-bold text-[11px] active:scale-95 transition-all flex items-center gap-1.5 ${isZipping ? 'opacity-50' : ''}`}>
+                    {isZipping ? `⏳ Zipping ${zipProgress}%` : '📦 Download All (ZIP)'}
+                  </button>
+                </div>
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                  {allRecordings.map(renderRecording)}
                 </div>
               </div>
             )}
