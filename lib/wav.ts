@@ -44,6 +44,55 @@ export function encodeWav(samples: Float32Array, sampleRate = 44100): Blob {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
+/** Encode two raw Float32 PCM channels to a 16-bit Stereo WAV Blob at the given sample rate. */
+export function encodeStereoWav(leftSamples: Float32Array, rightSamples: Float32Array, sampleRate = 44100): Blob {
+  const numChannels = 2;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  
+  // Ensure both channels are the same length by padding with zeros if necessary
+  const maxLen = Math.max(leftSamples.length, rightSamples.length);
+  const dataBytes = maxLen * numChannels * bytesPerSample;
+
+  const buffer = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  // RIFF header
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataBytes, true);
+  writeStr(8, 'WAVE');
+  // fmt chunk
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);         // chunk size
+  view.setUint16(20, 1, true);          // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  // data chunk
+  writeStr(36, 'data');
+  view.setUint32(40, dataBytes, true);
+
+  // Interleave channels and convert to int16
+  let offset = 44;
+  for (let i = 0; i < maxLen; i++) {
+    const l = i < leftSamples.length ? Math.max(-1, Math.min(1, leftSamples[i])) : 0;
+    const r = i < rightSamples.length ? Math.max(-1, Math.min(1, rightSamples[i])) : 0;
+    view.setInt16(offset, l < 0 ? l * 0x8000 : l * 0x7fff, true);
+    view.setInt16(offset + 2, r < 0 ? r * 0x8000 : r * 0x7fff, true);
+    offset += 4;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
 /** Merge multiple Float32Array chunks into one */
 export function mergeChunks(chunks: Float32Array[]): Float32Array {
   const total = chunks.reduce((s, c) => s + c.length, 0);

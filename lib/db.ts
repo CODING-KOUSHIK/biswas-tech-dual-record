@@ -18,8 +18,7 @@ export interface RecordingMeta {
 
 export interface RecordingRecord extends RecordingMeta {
   id: string;       // `${pairId}_${role}`
-  localBlob: Blob;  // own microphone WAV
-  remoteBlob: Blob; // partner audio WAV
+  blob: Blob;       // single stereo WAV (Mic=Left, Partner=Right)
   uploaded?: boolean; // Track if uploaded to Google Drive
 }
 
@@ -35,7 +34,7 @@ let dbPromise: Promise<IDBPDatabase<BTDSchema>> | null = null;
 
 function getDB() {
   if (!dbPromise) {
-    dbPromise = openDB<BTDSchema>('btd-recordings', 1, {
+    dbPromise = openDB<BTDSchema>('btd-recordings', 2, {
       upgrade(db) {
         const store = db.createObjectStore('recordings', { keyPath: 'id' });
         store.createIndex('by_pairId', 'pairId');
@@ -115,17 +114,29 @@ export function buildFileName(
   pairSeq: number,
   recSeq: number,
   speakerName: string,
-  pairId?: string
+  pairId?: string,
+  partnerDeviceId?: string,
+  partnerGender?: string,
+  partnerName?: string
 ): string {
   const langLower = language.toLowerCase();
   const roleLower = role.toLowerCase();
   const devLower = deviceId.toLowerCase();
   const genLower = gender.toLowerCase();
   
+  const partnerRole = role === 'HOST' ? 'guest' : 'host';
+  const partnerDevLower = partnerDeviceId ? partnerDeviceId.toLowerCase() : 'unknown';
+  const partnerGenLower = partnerGender ? partnerGender.toLowerCase() : 'unknown';
+  const withPartnerStr = `_WITH_${partnerRole}_${partnerDevLower}_${partnerGenLower}`;
+  
   const pairPadded = String(pairSeq).padStart(3, '0');
   const recPadded = String(recSeq).padStart(3, '0');
-  const nameClean = speakerName.trim().replace(/\s+/g, '_'); // preserve spaces as underscores, keep name readable
+  
+  const nameClean = speakerName.trim().replace(/\s+/g, '_');
+  const partnerNameClean = partnerName ? partnerName.trim().replace(/\s+/g, '_') : 'unknown';
+  const namesStr = `${nameClean}_AND_${partnerNameClean}`;
+  
   const meetingTag = pairId ? `_Meeting_${pairId}` : '';
 
-  return `${langLower}_${roleLower}_${devLower}_${genLower}${meetingTag}_PAIR${pairPadded} - ${recPadded}(${nameClean}).wav`;
+  return `${langLower}_${roleLower}_${devLower}_${genLower}${withPartnerStr}${meetingTag}_PAIR${pairPadded} - ${recPadded}(${namesStr}).wav`;
 }
