@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { loadProfile } from '@/lib/profile';
 import { getDeviceId } from '@/lib/device';
 import { getAllRecordings, deleteRecording, markRecordingAsUploaded, RecordingRecord } from '@/lib/db';
+import JSZip from 'jszip';
 
 type Gender = 'MALE' | 'FEMALE';
 type View = 'home' | 'invite' | 'recordings';
@@ -19,6 +20,35 @@ function fmtDate(ts: number) {
 export default function HomePage() {
   const router = useRouter();
   const [view, setView] = useState<View>('home');
+
+  const shareNative = async (rec: RecordingRecord) => {
+    if (isProcessing) return;
+    try {
+      if (navigator.share) {
+        setIsProcessing(true);
+        setSharingId(rec.id);
+        
+        // Step 1: Force download to device first (instant from memory)
+        downloadSingleBlob(rec.blob, rec.fileName);
+        
+        // Step 2: Artificial delay so user sees the "Downloading..." animation
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const file = new File([rec.blob], rec.fileName, { type: 'audio/wav' });
+        await navigator.share({
+          files: [file],
+          title: rec.fileName,
+        });
+      } else {
+        alert('Native sharing is not supported on this browser.');
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') console.error('Share failed:', err);
+    } finally {
+      setIsProcessing(false);
+      setSharingId(null);
+    }
+  };
 
   const navigateToView = (newView: View) => {
     setView(newView);
@@ -41,6 +71,10 @@ export default function HomePage() {
   const [profile, setProfile] = useState<ReturnType<typeof loadProfile>>(null);
   const [deviceId, setDeviceId] = useState('');
   const [partnerGender, setPartnerGender] = useState<Gender>('FEMALE');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [sharingId, setSharingId] = useState<string | null>(null);
+  const [isZipping, setIsZipping] = useState(false);
+  const [zipProgress, setZipProgress] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [inviteResult, setInviteResult] = useState<{ url: string; pairId: string; roomId: string } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -111,6 +145,33 @@ export default function HomePage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 5000);
+  };
+
+  const downloadAllZip = async () => {
+    if (recordings.length === 0 || isProcessing) return;
+    setIsProcessing(true);
+    setIsZipping(true);
+    setZipProgress(0);
+
+    try {
+      const zip = new JSZip();
+      recordings.forEach((rec) => {
+        zip.file(rec.fileName, rec.blob);
+      });
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
+        setZipProgress(Math.floor(metadata.percent));
+      });
+
+      downloadSingleBlob(zipBlob, `BiswasTech_Recordings_${Date.now()}.zip`);
+    } catch (err) {
+      console.error('Failed to create ZIP:', err);
+      alert('Failed to create ZIP file.');
+    } finally {
+      setIsZipping(false);
+      setIsProcessing(false);
+      setZipProgress(0);
+    }
   };
 
   const handleDownloadWav = (rec: RecordingRecord) => {
@@ -273,32 +334,48 @@ export default function HomePage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {recordings.map((rec) => {
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-[14px] font-bold text-slate-450">All Your Recordings</h2>
+              <button onClick={downloadAllZip} disabled={isProcessing}
+                className={`px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-bold text-[11px] active:scale-95 transition-all flex items-center gap-1.5 ${isProcessing ? 'opacity-50' : ''}`}>
+                {isZipping ? `⏳ Zipping ${zipProgress}%` : '📦 Download All (ZIP)'}
+              </button>
+            </div>
+            {recordings.map((rec, index) => {
+              const recNumber = recordings.length - index;
               return (
-                <div key={rec.id} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-5 space-y-4">
-                  <div>
-                    <p className="font-mono text-[12px] font-semibold text-slate-200 break-all leading-relaxed">{rec.fileName}</p>
-                    <p className="text-[11px] text-slate-550 mt-1">{fmtDate(rec.createdAt)}</p>
+                <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[13px] font-bold text-white flex-1 mr-3">Recording {recNumber}</p>
+                    <span className="text-[10px] bg-slate-850 text-slate-450 px-2 py-0.5 rounded-md font-semibold shrink-0">{rec.durationSec}s</span>
                   </div>
+                  <p className="text-[10px] font-mono text-slate-500 break-all leading-relaxed">{rec.fileName}</p>
+                  
                   <div className="flex flex-wrap gap-2">
                     <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{rec.role}</span>
                     <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{rec.language}</span>
-                    <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{fmtDur(rec.durationSec)}</span>
-                    {rec.uploaded && (
-                      <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2.5 py-1 rounded-md font-bold">✓ Uploaded to Google Drive</span>
-                    )}
+                    <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{fmtDate(rec.createdAt)}</span>
                   </div>
                   <p className="text-[11px] text-slate-500">Partner: {rec.partnerName}</p>
 
-                  <div className="grid grid-cols-2 gap-2 pt-2">
-                    <button onClick={() => handleDownloadWav(rec)}
-                      className="h-12 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
-                      📥 Download WAV
+                  <div className="grid grid-cols-2 gap-2.5 w-full pt-1.5">
+                    <button onClick={() => handleDownloadWav(rec)} disabled={isProcessing}
+                      className={`col-span-2 h-12 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-[14px] font-extrabold text-[14px] shadow-lg shadow-indigo-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 ${isProcessing ? 'opacity-50' : ''}`}>
+                      <span className="text-[16px]">📥</span> Download WAV
                     </button>
 
-                    <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
-                      className="h-12 text-red-400 bg-red-500/15 hover:bg-red-500/25 disabled:opacity-50 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center">
-                      {deletingId === rec.id ? '…' : 'Delete'}
+                    <button onClick={() => shareNative(rec)} disabled={isProcessing}
+                      className={`h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm ${isProcessing ? 'opacity-50' : ''}`}>
+                      {sharingId === rec.id ? (
+                        <><span className="w-4 h-4 border-2 border-[#24A1DE]/30 border-t-[#24A1DE] rounded-full animate-spin" /> Downloading...</>
+                      ) : (
+                        <><span className="text-[15px]">📤</span> Share</>
+                      )}
+                    </button>
+                    
+                    <button onClick={() => handleDelete(rec.id)} disabled={isProcessing}
+                      className={`h-12 bg-red-500/15 hover:bg-red-500/25 text-red-500 border border-red-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm ${isProcessing ? 'opacity-50' : ''}`}>
+                      <span className="text-[15px]">🗑️</span> {deletingId === rec.id ? '…' : 'Delete'}
                     </button>
                   </div>
                 </div>
@@ -311,5 +388,3 @@ export default function HomePage() {
     </div>
   );
 }
-
-

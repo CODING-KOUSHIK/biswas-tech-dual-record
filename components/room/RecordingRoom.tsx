@@ -17,7 +17,7 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, encodeStereoWav, mergeChunks, downsampleBuffer } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, markRecordingAsUploaded, RecordingRecord } from '@/lib/db';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, markRecordingAsUploaded, RecordingRecord, deleteRecording } from '@/lib/db';
 import { useWakeLock } from '@/hooks/useWakeLock';
 
 interface Session {
@@ -73,6 +73,8 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const [mySignal, setMySignal] = useState<Signal>('unknown');
 
   // Debounced speak state variables
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [sharingId, setSharingId] = useState<string | null>(null);
   const [iAmSpeaking, setIAmSpeaking] = useState(false);
   const [partnerSpeaking, setPartnerSpeaking] = useState(false);
   const localSpeechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -534,6 +536,58 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   }, [acquireWakeLock, releaseWakeLock]);
 
   const fmtTime = (s: number) => `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleDelete = async (rec: RecordingRecord) => {
+    if (isProcessing) return;
+    const ok = window.confirm('Are you sure you want to permanently delete this recording?');
+    if (!ok) return;
+    setIsProcessing(true);
+    setDeletingId(rec.id);
+    try {
+      await deleteRecording(rec.id);
+      setCurrentRecordings((prev) => prev.filter((r) => r.id !== rec.id));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsProcessing(false);
+      setDeletingId(null);
+    }
+  };
+
+  const shareNative = async (rec: RecordingRecord) => {
+    if (isProcessing) return;
+    try {
+      if (navigator.share) {
+        setIsProcessing(true);
+        setSharingId(rec.id);
+        
+        // Step 1: Force download to device first (instant from memory)
+        downloadSingleBlob(rec.blob, rec.fileName);
+        
+        // Step 2: Artificial delay so user sees the "Downloading..." animation
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        // Step 3: Open Native Share Sheet
+        const file = new File([rec.blob], rec.fileName, { type: 'audio/wav' });
+        await navigator.share({
+          files: [file],
+          title: rec.fileName,
+        });
+      } else {
+        alert('Native sharing is not supported on this browser. Please download the file manually.');
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('Share failed:', err);
+      }
+    } finally {
+      setIsProcessing(false);
+      setSharingId(null);
+    }
+  };
+
   const sigLabel = { excellent: '● Excellent', good: '● Good', poor: '● Weak', unknown: '○ --' }[mySignal];
   const sigColor = { excellent: 'text-green-600', good: 'text-blue-600', poor: 'text-yellow-600', unknown: 'text-slate-400' }[mySignal];
 
@@ -772,32 +826,34 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
               <div className="w-full pt-4 mt-2 space-y-3.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <h3 className="font-bold text-[14px] text-slate-450">Session Recordings</h3>
                 <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                  {currentRecordings.map((rec) => {
+                  {currentRecordings.map((rec, idx) => {
+                    const recNumber = currentRecordings.length - idx;
                     return (
                       <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
                         <div className="flex items-center justify-between">
-                          <p className="text-[11px] font-mono text-slate-350 break-all leading-relaxed flex-1 mr-3">{rec.fileName}</p>
+                          <p className="text-[13px] font-bold text-white flex-1 mr-3">Recording {recNumber}</p>
                           <span className="text-[10px] bg-slate-850 text-slate-450 px-2 py-0.5 rounded-md font-semibold shrink-0">{rec.durationSec}s</span>
                         </div>
-
-                        {rec.uploaded && (
-                          <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2 py-0.5 rounded font-bold inline-block">✓ Uploaded to Google Drive</span>
-                        )}
+                        <p className="text-[10px] font-mono text-slate-500 break-all leading-relaxed">{rec.fileName}</p>
 
                         <div className="grid grid-cols-2 gap-2.5 w-full pt-1.5">
-                          <button onClick={() => handleDownloadWav(rec)}
-                            className="col-span-2 h-12 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-[14px] font-extrabold text-[14px] shadow-lg shadow-indigo-500/25 active:scale-95 transition-all flex items-center justify-center gap-2">
+                          <button onClick={() => handleDownloadWav(rec)} disabled={isProcessing}
+                            className={`col-span-2 h-12 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-[14px] font-extrabold text-[14px] shadow-lg shadow-indigo-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 ${isProcessing ? 'opacity-50' : ''}`}>
                             <span className="text-[16px]">📥</span> Download WAV
                           </button>
 
-                          <button onClick={() => shareTelegram(rec)}
-                            className="h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
-                            <span className="text-[15px]">✈️</span> Telegram
+                          <button onClick={() => shareNative(rec)} disabled={isProcessing}
+                            className={`h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm ${isProcessing ? 'opacity-50' : ''}`}>
+                            {sharingId === rec.id ? (
+                              <><span className="w-4 h-4 border-2 border-[#24A1DE]/30 border-t-[#24A1DE] rounded-full animate-spin" /> Downloading...</>
+                            ) : (
+                              <><span className="text-[15px]">📤</span> Share</>
+                            )}
                           </button>
-
-                          <button onClick={() => shareWhatsApp(rec)}
-                            className="h-12 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-500 border border-emerald-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
-                            <span className="text-[15px]">💬</span> WhatsApp
+                          
+                          <button onClick={() => handleDelete(rec)} disabled={isProcessing}
+                            className={`h-12 bg-red-500/15 hover:bg-red-500/25 text-red-500 border border-red-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm ${isProcessing ? 'opacity-50' : ''}`}>
+                            <span className="text-[15px]">🗑️</span> Delete
                           </button>
                         </div>
                       </div>
