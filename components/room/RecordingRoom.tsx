@@ -566,11 +566,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   const shareWhatsApp = async (rec: RecordingRecord) => {
     try {
-      const text = `Hi, I have completed the recording for Pair ${rec.pairId} (${rec.role === 'HOST' ? 'Host' : 'Guest'}).\n\n` +
-        `File: ${rec.fileName}\n\n` +
-        `*Please attach the downloaded WAV file as a Document to preserve its audio format.*`;
-
-      const whatsappUrl = `https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`;
+      const whatsappUrl = `https://api.whatsapp.com/send?phone=919093847448`;
 
       downloadSingleBlob(rec.blob, rec.fileName);
 
@@ -794,8 +790,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                             <span className="text-[16px]">📥</span> Download WAV
                           </button>
 
-                          {session.role === 'HOST' && (
-                            <>
                               <button onClick={() => shareTelegram(rec)}
                                 className="h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
                                 <span className="text-[15px]">✈️</span> Telegram
@@ -805,8 +799,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                                 className="h-12 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-500 border border-emerald-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
                                 <span className="text-[15px]">💬</span> WhatsApp
                               </button>
-                            </>
-                          )}
                         </div>
                       </div>
                     );
