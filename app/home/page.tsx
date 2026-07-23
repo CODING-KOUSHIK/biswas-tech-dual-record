@@ -124,32 +124,47 @@ export default function HomePage() {
 
     try {
       const { blob, filename } = await getRecordingZipBlob(rec, (pct) => setZipProgress(pct));
+      const driveUrl = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_LINK || 'https://drive.google.com';
+      let uploadedSuccess = false;
 
-      const base64 = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const res = reader.result as string;
-          resolve(res.split(',')[1] || '');
-        };
-        reader.readAsDataURL(blob);
-      });
+      try {
+        const base64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const res = reader.result as string;
+            resolve(res.split(',')[1] || '');
+          };
+          reader.readAsDataURL(blob);
+        });
 
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
-      });
-      const data = await res.json();
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
+        });
 
-      if (data.driveUrl) {
-        window.open(data.driveUrl, '_blank');
+        if (res.ok) {
+          const text = await res.text();
+          let data: any = {};
+          try { data = JSON.parse(text); } catch {}
+          if (data.driveUrl) window.open(data.driveUrl, '_blank');
+          uploadedSuccess = true;
+        }
+      } catch (e) {
+        console.warn('API route upload error:', e);
+      }
+
+      if (!uploadedSuccess) {
+        // Fallback: download ZIP locally and open Google Drive folder
+        await downloadRecordingPair(rec);
+        window.open(driveUrl, '_blank');
       }
 
       await markRecordingAsUploaded(rec.id);
       const updated = await getAllRecordings();
       setRecordings(updated);
     } catch (err) {
-      console.error('Upload failed:', err);
+      console.error('Upload process error:', err);
       alert('Upload failed: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setProcessingZipId(null);
