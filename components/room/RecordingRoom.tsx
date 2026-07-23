@@ -84,6 +84,8 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // Saved recordings in the current session
   const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
 
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -544,7 +546,25 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // ─── HANDLERS FOR DOWNLOAD & DRIVE UPLOAD ─────────────────────────
   const handleDownloadWav = (rec: RecordingRecord) => {
-    downloadSingleBlob(rec.blob, rec.fileName);
+    if (downloadingId) return;
+    setDownloadingId(rec.id);
+    setDownloadProgress(0);
+
+    const interval = setInterval(() => {
+      setDownloadProgress(p => {
+        if (p >= 100) {
+          clearInterval(interval);
+          return 100;
+        }
+        return p + 20;
+      });
+    }, 150);
+
+    setTimeout(() => {
+      downloadSingleBlob(rec.blob, rec.fileName);
+      setDownloadingId(null);
+      setDownloadProgress(0);
+    }, 800);
   };
 
   // ─── SHARE HELPERS ───────────────────────────────────────────
@@ -785,9 +805,20 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                         )}
 
                         <div className="grid grid-cols-2 gap-2.5 w-full pt-1.5">
-                          <button onClick={() => handleDownloadWav(rec)}
-                            className="col-span-2 h-12 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-[14px] font-extrabold text-[14px] shadow-lg shadow-indigo-500/25 active:scale-95 transition-all flex items-center justify-center gap-2">
-                            <span className="text-[16px]">📥</span> Download WAV
+                          <button onClick={() => handleDownloadWav(rec)} disabled={downloadingId !== null}
+                            className={`col-span-2 h-12 rounded-[14px] font-extrabold text-[14px] shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 overflow-hidden relative ${
+                              downloadingId === rec.id ? 'bg-indigo-700 text-white/90 shadow-indigo-500/10' : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white shadow-indigo-500/25'
+                            } ${downloadingId !== null && downloadingId !== rec.id ? 'opacity-50' : ''}`}>
+                            {downloadingId === rec.id ? (
+                              <>
+                                <div className="absolute left-0 top-0 bottom-0 bg-indigo-500 transition-all duration-150 ease-out z-0" style={{ width: `${downloadProgress}%` }}></div>
+                                <span className="relative z-10 flex items-center gap-2">
+                                  <span className="text-[16px] animate-bounce">⏳</span> Downloading {downloadProgress}%
+                                </span>
+                              </>
+                            ) : (
+                              <><span className="text-[16px]">📥</span> Download WAV</>
+                            )}
                           </button>
 
                               <button onClick={() => shareTelegram(rec)}

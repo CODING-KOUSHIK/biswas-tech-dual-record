@@ -24,6 +24,9 @@ export function useWakeLock() {
   }, []);
 
   useEffect(() => {
+    // Acquire lock immediately on mount
+    acquire();
+    
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible' && !lockRef.current) {
         await acquire();
