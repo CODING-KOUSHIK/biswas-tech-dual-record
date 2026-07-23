@@ -124,38 +124,73 @@ export default function HomePage() {
 
     try {
       const { blob, filename } = await getRecordingZipBlob(rec, (pct) => setZipProgress(pct));
+      const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL;
       const driveUrl = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_LINK || 'https://drive.google.com';
       let uploadedSuccess = false;
 
-      try {
-        const base64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const res = reader.result as string;
-            resolve(res.split(',')[1] || '');
-          };
-          reader.readAsDataURL(blob);
-        });
+      // 1. Direct browser fetch to Google Apps Script Web App (bypasses Vercel 4.5MB limit)
+      if (scriptUrl) {
+        try {
+          const base64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const res = reader.result as string;
+              resolve(res.split(',')[1] || '');
+            };
+            reader.readAsDataURL(blob);
+          });
 
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
-        });
+          const res = await fetch(scriptUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
+          });
 
-        if (res.ok) {
-          const text = await res.text();
-          let data: any = {};
-          try { data = JSON.parse(text); } catch {}
-          if (data.driveUrl) window.open(data.driveUrl, '_blank');
-          uploadedSuccess = true;
+          if (res.ok) {
+            const text = await res.text();
+            let data: any = {};
+            try { data = JSON.parse(text); } catch {}
+            if (data.status !== 'error') {
+              uploadedSuccess = true;
+            }
+          }
+        } catch (e) {
+          console.warn('Direct Apps Script upload failed, trying backend route:', e);
         }
-      } catch (e) {
-        console.warn('API route upload error:', e);
       }
 
+      // 2. Secondary attempt via backend route /api/upload
       if (!uploadedSuccess) {
-        // Fallback: download ZIP locally and open Google Drive folder
+        try {
+          const base64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const res = reader.result as string;
+              resolve(res.split(',')[1] || '');
+            };
+            reader.readAsDataURL(blob);
+          });
+
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
+          });
+
+          if (res.ok) {
+            const text = await res.text();
+            let data: any = {};
+            try { data = JSON.parse(text); } catch {}
+            if (data.driveUrl) window.open(data.driveUrl, '_blank');
+            uploadedSuccess = true;
+          }
+        } catch (e) {
+          console.warn('API route upload error:', e);
+        }
+      }
+
+      // 3. Fallback: download ZIP locally and open Google Drive folder
+      if (!uploadedSuccess) {
         await downloadRecordingPair(rec);
         window.open(driveUrl, '_blank');
       }
@@ -163,6 +198,9 @@ export default function HomePage() {
       await markRecordingAsUploaded(rec.id);
       const updated = await getAllRecordings();
       setRecordings(updated);
+      if (uploadedSuccess) {
+        alert('✓ Recording ZIP uploaded successfully to Google Drive!');
+      }
     } catch (err) {
       console.error('Upload process error:', err);
       alert('Upload failed: ' + (err instanceof Error ? err.message : String(err)));
