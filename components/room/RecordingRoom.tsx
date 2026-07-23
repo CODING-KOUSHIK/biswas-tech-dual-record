@@ -69,6 +69,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const [errorMsg, setErrorMsg] = useState('');
   const [partnerConnected, setPartnerConnected] = useState(false);
   const [partnerName, setPartnerName] = useState(session.partnerName);
+  const [partnerGender, setPartnerGender] = useState(session.partnerGender);
   const [mySignal, setMySignal] = useState<Signal>('unknown');
 
   // Debounced speak state variables
@@ -84,16 +85,13 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   // Saved recordings in the current session
   const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
 
-  // Uploading state
-  const [uploadingId, setUploadingId] = useState<string | null>(null);
-
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
   const stopRecordingRef = useRef<() => Promise<void>>(async () => {});
   const setConnStateRef = useRef(setConnState);
 
   // ─── DATA CHANNEL SEND HELPER ───────────────────────────────────────────
-  const sendData = useCallback(async (msg: { type: string }) => {
+  const sendData = useCallback(async (msg: { type: string; [key: string]: any }) => {
     const room = roomRef.current;
     if (!room) return;
     try {
@@ -221,7 +219,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       session.myName, 
       session.pairId,
       partnerDeviceIdRef.current,
-      session.partnerGender,
+      partnerGender,
       partnerName
     );
     const id = `${session.pairId}_${session.role}_${recSeq}`; // unique id for multiple recordings in same pair
@@ -234,7 +232,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       language: session.myLanguage,
       gender: session.myGender,
       partnerName,
-      partnerGender: session.partnerGender,
+      partnerGender,
       partnerDeviceId: partnerDeviceIdRef.current,
       durationSec,
       createdAt: Date.now(),
@@ -249,7 +247,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     if (session.role === 'HOST') {
       await sendData({ type: 'STOP_REC' });
     }
-  }, [session, partnerName, releaseWakeLock, sendData]);
+  }, [session, partnerName, partnerGender, releaseWakeLock, sendData]);
 
   // Keep callback refs updated to prevent stale closures
   useEffect(() => {
@@ -330,6 +328,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
         console.log('[Room] Connected ✓', roomId);
         setConnStateRef.current('waiting');
         updatePartners();
+        sendData({ type: 'SYNC_INFO', gender: session.myGender });
       })
       .on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
         if (reason === DisconnectReason.CLIENT_INITIATED) return;
@@ -443,6 +442,8 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
             stopRecordingRef.current();
           } else if (msg.type === 'NEW_SESSION') {
             setConnStateRef.current('ready');
+          } else if (msg.type === 'SYNC_INFO' && msg.gender) {
+            setPartnerGender(msg.gender);
           }
         } catch (e) {
           console.error('[Room] Failed parsing sync message:', e);
@@ -546,111 +547,21 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     downloadSingleBlob(rec.blob, rec.fileName);
   };
 
-  const handleUploadDrive = async (rec: RecordingRecord) => {
-    if (uploadingId) return;
-    setUploadingId(rec.id);
-
-    try {
-      const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL;
-      const driveUrl = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_LINK || 'https://drive.google.com';
-      let uploadedSuccess = false;
-
-      // 1. Direct browser fetch to Google Apps Script Web App (bypasses Vercel 4.5MB limit)
-      if (scriptUrl) {
-        try {
-          const base64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const res = reader.result as string;
-              resolve(res.split(',')[1] || '');
-            };
-            reader.readAsDataURL(rec.blob);
-          });
-
-          const res = await fetch(scriptUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ filename: rec.fileName, base64, pairId: rec.pairId }),
-          });
-
-          if (res.ok) {
-            const text = await res.text();
-            let data: any = {};
-            try { data = JSON.parse(text); } catch {}
-            if (data.status !== 'error') {
-              uploadedSuccess = true;
-            }
-          }
-        } catch (e) {
-          console.warn('Direct Apps Script upload failed, trying backend route:', e);
-        }
-      }
-
-      // 2. Secondary attempt via backend route /api/upload
-      if (!uploadedSuccess) {
-        try {
-          const base64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const res = reader.result as string;
-              resolve(res.split(',')[1] || '');
-            };
-            reader.readAsDataURL(rec.blob);
-          });
-
-          const res = await fetch('/api/upload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: rec.fileName, base64, pairId: rec.pairId }),
-          });
-
-          if (res.ok) {
-            const text = await res.text();
-            let data: any = {};
-            try { data = JSON.parse(text); } catch {}
-            if (data.driveUrl) window.open(data.driveUrl, '_blank');
-            uploadedSuccess = true;
-          }
-        } catch (e) {
-          console.warn('API route upload error:', e);
-        }
-      }
-
-      // 3. Fallback: download locally and open Google Drive folder
-      if (!uploadedSuccess) {
-        downloadSingleBlob(rec.blob, rec.fileName);
-        window.open(driveUrl, '_blank');
-      }
-
-      await markRecordingAsUploaded(rec.id);
-      const updated = await getAllRecordings();
-      setCurrentRecordings(updated.filter((r) => r.pairId === session.pairId));
-      if (uploadedSuccess) {
-        alert('✓ Recording uploaded successfully to Google Drive!');
-      }
-    } catch (err) {
-      console.error('Upload process error:', err);
-      alert('Upload failed: ' + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setUploadingId(null);
-    }
-  };
-
-  // ─── WHATSAPP SHARE HELPER ───────────────────────────────────────────
+  // ─── TELEGRAM SHARE HELPER ───────────────────────────────────────────
   const shareFile = async (rec: RecordingRecord) => {
     try {
       const text = `Hi, I have completed the recording for Pair ${rec.pairId} (${rec.role === 'HOST' ? 'Host' : 'Guest'}).\n\n` +
         `File: ${rec.fileName}\n\n` +
         `*Please attach the downloaded WAV file as a Document to preserve its audio format.*`;
 
-      const whatsappUrl = `https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`;
+      const telegramUrl = `https://t.me/biswastechx?text=${encodeURIComponent(text)}`;
 
       // 1. Download the WAV file locally so user can select it
       downloadSingleBlob(rec.blob, rec.fileName);
 
-      // 2. Open WhatsApp directly to the default user (Bypassing Web Share to prevent AAC conversion)
+      // 2. Open Telegram directly to the default user
       setTimeout(() => {
-        window.open(whatsappUrl, '_blank');
+        window.open(telegramUrl, '_blank');
       }, 500);
     } catch (err) {
       console.error('Share failed:', err);
@@ -852,9 +763,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                 <h3 className="font-bold text-[14px] text-slate-450">Session Recordings</h3>
                 <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
                   {currentRecordings.map((rec) => {
-                    const isUploadingThis = uploadingId === rec.id;
-                    const isAnyProcessing = uploadingId !== null;
-
                     return (
                       <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
                         <div className="flex items-center justify-between">
@@ -866,21 +774,16 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                           <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2 py-0.5 rounded font-bold inline-block">✓ Uploaded to Google Drive</span>
                         )}
 
-                        <div className="grid grid-cols-2 gap-2 w-full pt-1">
-                          <button onClick={() => handleDownloadWav(rec)} disabled={isAnyProcessing}
-                            className="h-11 bg-indigo-600 hover:bg-indigo-750 disabled:opacity-50 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
+                        <div className="grid grid-cols-1 gap-2 w-full pt-1">
+                          <button onClick={() => handleDownloadWav(rec)}
+                            className="h-11 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
                             📥 Download WAV
                           </button>
 
-                          <button onClick={() => handleUploadDrive(rec)} disabled={isAnyProcessing}
-                            className="h-11 bg-purple-600/20 hover:bg-purple-600/30 disabled:opacity-50 text-purple-300 border border-purple-500/30 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
-                            {isUploadingThis ? 'Uploading…' : '☁️ Upload Drive'}
-                          </button>
-
                           {session.role === 'HOST' && (
-                            <button onClick={() => shareFile(rec)} disabled={isAnyProcessing}
-                              className="col-span-2 h-11 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-50 text-emerald-400 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
-                              💬 Share WhatsApp
+                            <button onClick={() => shareFile(rec)}
+                              className="h-11 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
+                              💬 Share Telegram
                             </button>
                           )}
                         </div>

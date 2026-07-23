@@ -49,8 +49,6 @@ export default function HomePage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
 
-  const [uploadingId, setUploadingId] = useState<string | null>(null);
-
   useEffect(() => {
     const p = loadProfile();
     if (!p) { router.replace('/setup'); return; }
@@ -115,96 +113,6 @@ export default function HomePage() {
 
   const handleDownloadWav = (rec: RecordingRecord) => {
     downloadSingleBlob(rec.blob, rec.fileName);
-  };
-
-  const handleUploadDrive = async (rec: RecordingRecord) => {
-    if (uploadingId) return;
-    setUploadingId(rec.id);
-
-    try {
-      const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL;
-      const driveUrl = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_LINK || 'https://drive.google.com';
-      let uploadedSuccess = false;
-
-      // 1. Direct browser fetch to Google Apps Script Web App (bypasses Vercel 4.5MB limit)
-      if (scriptUrl) {
-        try {
-          const base64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const res = reader.result as string;
-              resolve(res.split(',')[1] || '');
-            };
-            reader.readAsDataURL(rec.blob);
-          });
-
-          const res = await fetch(scriptUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ filename: rec.fileName, base64, pairId: rec.pairId }),
-          });
-
-          if (res.ok) {
-            const text = await res.text();
-            let data: any = {};
-            try { data = JSON.parse(text); } catch {}
-            if (data.status !== 'error') {
-              uploadedSuccess = true;
-            }
-          }
-        } catch (e) {
-          console.warn('Direct Apps Script upload failed, trying backend route:', e);
-        }
-      }
-
-      // 2. Secondary attempt via backend route /api/upload
-      if (!uploadedSuccess) {
-        try {
-          const base64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const res = reader.result as string;
-              resolve(res.split(',')[1] || '');
-            };
-            reader.readAsDataURL(rec.blob);
-          });
-
-          const res = await fetch('/api/upload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: rec.fileName, base64, pairId: rec.pairId }),
-          });
-
-          if (res.ok) {
-            const text = await res.text();
-            let data: any = {};
-            try { data = JSON.parse(text); } catch {}
-            if (data.driveUrl) window.open(data.driveUrl, '_blank');
-            uploadedSuccess = true;
-          }
-        } catch (e) {
-          console.warn('API route upload error:', e);
-        }
-      }
-
-      // 3. Fallback: download locally and open Google Drive folder
-      if (!uploadedSuccess) {
-        downloadSingleBlob(rec.blob, rec.fileName);
-        window.open(driveUrl, '_blank');
-      }
-
-      await markRecordingAsUploaded(rec.id);
-      const updated = await getAllRecordings();
-      setRecordings(updated);
-      if (uploadedSuccess) {
-        alert('✓ Recording uploaded successfully to Google Drive!');
-      }
-    } catch (err) {
-      console.error('Upload process error:', err);
-      alert('Upload failed: ' + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setUploadingId(null);
-    }
   };
 
 
@@ -366,9 +274,6 @@ export default function HomePage() {
         ) : (
           <div className="space-y-4">
             {recordings.map((rec) => {
-              const isUploadingThis = uploadingId === rec.id;
-              const isAnyProcessing = uploadingId !== null;
-
               return (
                 <div key={rec.id} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-5 space-y-4">
                   <div>
@@ -386,18 +291,13 @@ export default function HomePage() {
                   <p className="text-[11px] text-slate-500">Partner: {rec.partnerName}</p>
 
                   <div className="grid grid-cols-2 gap-2 pt-2">
-                    <button onClick={() => handleDownloadWav(rec)} disabled={isAnyProcessing}
-                      className="h-12 bg-indigo-600 hover:bg-indigo-750 disabled:opacity-50 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
+                    <button onClick={() => handleDownloadWav(rec)}
+                      className="h-12 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
                       📥 Download WAV
                     </button>
 
-                    <button onClick={() => handleUploadDrive(rec)} disabled={isAnyProcessing}
-                      className="h-12 bg-purple-600/20 hover:bg-purple-600/30 disabled:opacity-50 text-purple-300 border border-purple-500/30 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
-                      {isUploadingThis ? 'Uploading…' : '☁️ Upload Drive'}
-                    </button>
-
-                    <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id || isAnyProcessing}
-                      className="h-12 text-red-400 bg-red-500/15 hover:bg-red-500/25 disabled:opacity-50 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center col-span-2">
+                    <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
+                      className="h-12 text-red-400 bg-red-500/15 hover:bg-red-500/25 disabled:opacity-50 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center">
                       {deletingId === rec.id ? '…' : 'Delete'}
                     </button>
                   </div>
