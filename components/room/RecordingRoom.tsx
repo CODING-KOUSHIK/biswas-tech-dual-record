@@ -547,14 +547,10 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     downloadSingleBlob(rec.blob, rec.fileName);
   };
 
-  // ─── TELEGRAM SHARE HELPER ───────────────────────────────────────────
-  const shareFile = async (rec: RecordingRecord) => {
+  // ─── SHARE HELPERS ───────────────────────────────────────────
+  const shareTelegram = async (rec: RecordingRecord) => {
     try {
-      const text = `Hi, I have completed the recording for Pair ${rec.pairId} (${rec.role === 'HOST' ? 'Host' : 'Guest'}).\n\n` +
-        `File: ${rec.fileName}\n\n` +
-        `*Please attach the downloaded WAV file as a Document to preserve its audio format.*`;
-
-      const telegramUrl = `https://t.me/biswastechx?text=${encodeURIComponent(text)}`;
+      const telegramUrl = `https://t.me/biswastechx`;
 
       // 1. Download the WAV file locally so user can select it
       downloadSingleBlob(rec.blob, rec.fileName);
@@ -562,6 +558,24 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       // 2. Open Telegram directly to the default user
       setTimeout(() => {
         window.open(telegramUrl, '_blank');
+      }, 500);
+    } catch (err) {
+      console.error('Share failed:', err);
+    }
+  };
+
+  const shareWhatsApp = async (rec: RecordingRecord) => {
+    try {
+      const text = `Hi, I have completed the recording for Pair ${rec.pairId} (${rec.role === 'HOST' ? 'Host' : 'Guest'}).\n\n` +
+        `File: ${rec.fileName}\n\n` +
+        `*Please attach the downloaded WAV file as a Document to preserve its audio format.*`;
+
+      const whatsappUrl = `https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`;
+
+      downloadSingleBlob(rec.blob, rec.fileName);
+
+      setTimeout(() => {
+        window.open(whatsappUrl, '_blank');
       }, 500);
     } catch (err) {
       console.error('Share failed:', err);
@@ -774,17 +788,24 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                           <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2 py-0.5 rounded font-bold inline-block">✓ Uploaded to Google Drive</span>
                         )}
 
-                        <div className="grid grid-cols-1 gap-2 w-full pt-1">
+                        <div className="grid grid-cols-2 gap-2.5 w-full pt-1.5">
                           <button onClick={() => handleDownloadWav(rec)}
-                            className="h-11 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
-                            📥 Download WAV
+                            className="col-span-2 h-12 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-[14px] font-extrabold text-[14px] shadow-lg shadow-indigo-500/25 active:scale-95 transition-all flex items-center justify-center gap-2">
+                            <span className="text-[16px]">📥</span> Download WAV
                           </button>
 
                           {session.role === 'HOST' && (
-                            <button onClick={() => shareFile(rec)}
-                              className="h-11 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
-                              💬 Share Telegram
-                            </button>
+                            <>
+                              <button onClick={() => shareTelegram(rec)}
+                                className="h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
+                                <span className="text-[15px]">✈️</span> Telegram
+                              </button>
+                              
+                              <button onClick={() => shareWhatsApp(rec)}
+                                className="h-12 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-500 border border-emerald-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
+                                <span className="text-[15px]">💬</span> WhatsApp
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
