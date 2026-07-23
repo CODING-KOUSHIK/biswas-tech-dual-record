@@ -193,67 +193,73 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     if (!cap) return;
 
     setConnState('stopping');
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    try {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
 
-    cap.localProc.disconnect();
-    cap.remoteProc?.disconnect();
-    await cap.ctx.close();
+      cap.localProc.disconnect();
+      cap.remoteProc?.disconnect();
+      cap.ctx.close().catch(console.error);
 
-    // CRITICAL: Only stop fallback stream tracks. Keep LiveKit mic track active for voice call.
-    if (isLocalStreamFallbackRef.current) {
-      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      // CRITICAL: Only stop fallback stream tracks. Keep LiveKit mic track active for voice call.
+      if (isLocalStreamFallbackRef.current) {
+        localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      }
+      localStreamRef.current = null;
+      captureRef.current = null;
+
+      const durationSec = Math.round((Date.now() - cap.startTime) / 1000);
+      const nativeSampleRate = cap.ctx.sampleRate;
+
+      const localMerged = mergeChunks(cap.localChunks);
+      const remoteMerged = cap.remoteChunks.length > 0 ? mergeChunks(cap.remoteChunks) : new Float32Array(0);
+      const stereoBlob = encodeStereoWav(localMerged, remoteMerged, nativeSampleRate);
+
+      // Calculate dynamic sequence naming and build output filenames
+      const { pairSeq, recSeq } = await getRecordingSequence(session.pairId);
+      const fileName = buildFileName(
+        session.myDeviceId, 
+        session.myLanguage, 
+        session.myGender, 
+        session.role, 
+        pairSeq, 
+        recSeq, 
+        session.myName, 
+        session.pairId,
+        partnerDeviceIdRef.current,
+        partnerGender,
+        partnerName
+      );
+      const id = `${session.pairId}_${session.role}_${recSeq}_${Date.now()}`; // Ensure strictly unique id
+
+      await saveRecording({
+        id,
+        pairId: session.pairId,
+        deviceId: session.myDeviceId,
+        role: session.role,
+        language: session.myLanguage,
+        gender: session.myGender,
+        partnerName,
+        partnerGender,
+        partnerDeviceId: partnerDeviceIdRef.current,
+        durationSec,
+        createdAt: Date.now(),
+        fileName,
+        blob: stereoBlob,
+      });
+
+      setRecCount((c) => c + 1);
+      setConnState('done');
+
+      // Host notifies guest to stop
+      if (session.role === 'HOST') {
+        await sendData({ type: 'STOP_REC' });
+      }
+    } catch (err: any) {
+      console.error('Stop Recording Error:', err);
+      setErrorMsg(`Failed to save recording: ${err.message || String(err)}`);
+      setConnState('error');
     }
-    localStreamRef.current = null;
-    captureRef.current = null;
-
-    const durationSec = Math.round((Date.now() - cap.startTime) / 1000);
-    const nativeSampleRate = cap.ctx.sampleRate;
-
-    const localMerged = mergeChunks(cap.localChunks);
-    const remoteMerged = cap.remoteChunks.length > 0 ? mergeChunks(cap.remoteChunks) : new Float32Array(0);
-    const stereoBlob = encodeStereoWav(localMerged, remoteMerged, nativeSampleRate);
-
-    // Calculate dynamic sequence naming and build output filenames
-    const { pairSeq, recSeq } = await getRecordingSequence(session.pairId);
-    const fileName = buildFileName(
-      session.myDeviceId, 
-      session.myLanguage, 
-      session.myGender, 
-      session.role, 
-      pairSeq, 
-      recSeq, 
-      session.myName, 
-      session.pairId,
-      partnerDeviceIdRef.current,
-      partnerGender,
-      partnerName
-    );
-    const id = `${session.pairId}_${session.role}_${recSeq}`; // unique id for multiple recordings in same pair
-
-    await saveRecording({
-      id,
-      pairId: session.pairId,
-      deviceId: session.myDeviceId,
-      role: session.role,
-      language: session.myLanguage,
-      gender: session.myGender,
-      partnerName,
-      partnerGender,
-      partnerDeviceId: partnerDeviceIdRef.current,
-      durationSec,
-      createdAt: Date.now(),
-      fileName,
-      blob: stereoBlob,
-    });
-
-    setRecCount((c) => c + 1);
-    setConnState('done');
-
-    // Host notifies guest to stop
-    if (session.role === 'HOST') {
-      await sendData({ type: 'STOP_REC' });
-    }
-  }, [session, partnerName, partnerGender, releaseWakeLock, sendData]);
+  }, [session, partnerName, partnerGender, sendData]);
 
   // Keep callback refs updated to prevent stale closures
   useEffect(() => {
