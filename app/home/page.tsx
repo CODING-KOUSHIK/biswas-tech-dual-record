@@ -10,10 +10,10 @@ type View = 'home' | 'invite' | 'recordings';
 
 function fmtDur(s: number) {
   const m = Math.floor(s / 60), sec = s % 60;
-  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 function fmtDate(ts: number) {
-  return new Date(ts).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  return new Date(ts).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 export default function HomePage() {
@@ -72,8 +72,10 @@ export default function HomePage() {
     if (!profile || generating) return;
     setGenerating(true); setInviteResult(null);
     try {
-      const res = await fetch('/api/invite/create', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hostDeviceId: deviceId, hostName: profile.name, hostLanguage: profile.language, hostGender: profile.gender, partnerGender }) });
+      const res = await fetch('/api/invite/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostDeviceId: deviceId, hostName: profile.name, hostLanguage: profile.language, hostGender: profile.gender, partnerGender })
+      });
       const d = await res.json();
       if (d.success) setInviteResult({ url: d.inviteUrl, pairId: d.pairId, roomId: d.roomId });
       else alert('Failed: ' + d.error);
@@ -82,7 +84,7 @@ export default function HomePage() {
 
   const handleCopy = async () => {
     if (!inviteResult) return;
-    try { await navigator.clipboard.writeText(inviteResult.url); } catch {}
+    try { await navigator.clipboard.writeText(inviteResult.url); } catch { }
     setCopied(true); setTimeout(() => setCopied(false), 3000);
   };
 
@@ -121,10 +123,10 @@ export default function HomePage() {
     if (!confirm('Delete ALL recordings and reset profile? This cannot be undone.')) return;
     setResetting(true);
     // Clear everything synchronously and redirect immediately
-    try { localStorage.clear(); sessionStorage.clear(); } catch {}
-    try { document.cookie.split(";").forEach(c => { document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); }); } catch {}
+    try { localStorage.clear(); sessionStorage.clear(); } catch { }
+    try { document.cookie.split(";").forEach(c => { document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); }); } catch { }
     // Delete IndexedDB in background — don't wait for it
-    try { indexedDB.deleteDatabase('btd-recordings'); } catch {}
+    try { indexedDB.deleteDatabase('btd-recordings'); } catch { }
     router.replace('/setup');
   };
 
@@ -195,11 +197,10 @@ export default function HomePage() {
             <div className="grid grid-cols-2 gap-4">
               {(['MALE', 'FEMALE'] as Gender[]).map(g => (
                 <button key={g} onClick={() => setPartnerGender(g)}
-                  className={`h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-95 ${
-                    partnerGender === g
+                  className={`h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-95 ${partnerGender === g
                       ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/25 border-transparent'
                       : 'border-2 border-slate-700 text-slate-400 hover:border-slate-650'
-                  }`}>
+                    }`}>
                   {g === 'MALE' ? '♂ Male' : '♀ Female'}
                 </button>
               ))}
@@ -226,9 +227,8 @@ export default function HomePage() {
 
             <div className="space-y-3">
               <button onClick={handleCopy}
-                className={`w-full h-14 rounded-2xl font-bold text-[14px] transition-all active:scale-[0.98] ${
-                  copied ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 border border-white/[0.06] text-white hover:bg-slate-700'
-                }`}>
+                className={`w-full h-14 rounded-2xl font-bold text-[14px] transition-all active:scale-[0.98] ${copied ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 border border-white/[0.06] text-white hover:bg-slate-700'
+                  }`}>
                 {copied ? '✓ Link Copied to Clipboard!' : '📋 Copy Invite Link'}
               </button>
 

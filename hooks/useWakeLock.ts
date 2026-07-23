@@ -10,7 +10,11 @@ export function useWakeLock() {
     if (!('wakeLock' in navigator)) return;
     try {
       if (lockRef.current) return;
-      lockRef.current = await navigator.wakeLock.request('screen');
+      const sentinel = await navigator.wakeLock.request('screen');
+      sentinel.addEventListener('release', () => {
+        lockRef.current = null;
+      });
+      lockRef.current = sentinel;
     } catch {
       // not available or denied — silent fail
     }

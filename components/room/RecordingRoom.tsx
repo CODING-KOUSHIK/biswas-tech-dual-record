@@ -17,8 +17,7 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, encodeStereoWav, mergeChunks, downsampleBuffer } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, markRecordingAsUploaded, RecordingRecord, deleteRecording } from '@/lib/db';
-import JSZip from 'jszip';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, markRecordingAsUploaded, RecordingRecord } from '@/lib/db';
 import { useWakeLock } from '@/hooks/useWakeLock';
 
 interface Session {
@@ -85,19 +84,14 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // Saved recordings in the current session
   const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
-  const [allRecordings, setAllRecordings] = useState<RecordingRecord[]>([]);
-  
-  // Zipping state
-  const [isZipping, setIsZipping] = useState(false);
-  const [zipProgress, setZipProgress] = useState(0);
 
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
-  const startRecordingRef = useRef<() => Promise<void>>(async () => {});
-  const stopRecordingRef = useRef<() => Promise<void>>(async () => {});
+  const startRecordingRef = useRef<() => Promise<void>>(async () => { });
+  const stopRecordingRef = useRef<() => Promise<void>>(async () => { });
   const setConnStateRef = useRef(setConnState);
 
   // ─── DATA CHANNEL SEND HELPER ───────────────────────────────────────────
-  const sendData = useCallback(async (msg: { type: string; [key: string]: any }) => {
+  const sendData = useCallback(async (msg: { type: string;[key: string]: any }) => {
     const room = roomRef.current;
     if (!room) return;
     try {
@@ -113,11 +107,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const startRecording = useCallback(async () => {
     const room = roomRef.current;
     if (!room) return;
-
-    // Host notifies guest to start IMMEDIATELY before local processing
-    if (session.role === 'HOST') {
-      sendData({ type: 'START_REC' }).catch(console.error);
-    }
 
     try {
       // 1. Get mic track from LiveKit to avoid opening the mic twice (prevents clicks/"bod bod" sound)
@@ -182,6 +171,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       setRecSeconds(0);
       timerRef.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
       setConnState('recording');
+
+      // Host notifies guest to start
+      if (session.role === 'HOST') {
+        await sendData({ type: 'START_REC' });
+      }
     } catch (err) {
       alert('Could not start recording: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -189,77 +183,71 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // ─── STOP RECORDING ───────────────────────────────────────────────────────
   const stopRecording = useCallback(async () => {
-    // Host notifies guest to stop IMMEDIATELY before local processing and db save
-    if (session.role === 'HOST') {
-      sendData({ type: 'STOP_REC' }).catch(console.error);
-    }
-
     const cap = captureRef.current;
     if (!cap) return;
 
     setConnState('stopping');
-    try {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
 
-      cap.localProc.disconnect();
-      cap.remoteProc?.disconnect();
-      cap.ctx.close().catch(console.error);
+    cap.localProc.disconnect();
+    cap.remoteProc?.disconnect();
+    await cap.ctx.close();
 
-      // CRITICAL: Only stop fallback stream tracks. Keep LiveKit mic track active for voice call.
-      if (isLocalStreamFallbackRef.current) {
-        localStreamRef.current?.getTracks().forEach((t) => t.stop());
-      }
-      localStreamRef.current = null;
-      captureRef.current = null;
-
-      const durationSec = Math.round((Date.now() - cap.startTime) / 1000);
-      const nativeSampleRate = cap.ctx.sampleRate;
-
-      const localMerged = mergeChunks(cap.localChunks);
-      const remoteMerged = cap.remoteChunks.length > 0 ? mergeChunks(cap.remoteChunks) : new Float32Array(0);
-      const stereoBlob = encodeStereoWav(localMerged, remoteMerged, nativeSampleRate);
-
-      // Calculate dynamic sequence naming and build output filenames
-      const { pairSeq, recSeq } = await getRecordingSequence(session.pairId);
-      const fileName = buildFileName(
-        session.myDeviceId, 
-        session.myLanguage, 
-        session.myGender, 
-        session.role, 
-        pairSeq, 
-        recSeq, 
-        session.myName, 
-        session.pairId,
-        partnerDeviceIdRef.current,
-        partnerGender,
-        partnerName
-      );
-      const id = `${session.pairId}_${session.role}_${recSeq}_${Date.now()}`; // Ensure strictly unique id
-
-      await saveRecording({
-        id,
-        pairId: session.pairId,
-        deviceId: session.myDeviceId,
-        role: session.role,
-        language: session.myLanguage,
-        gender: session.myGender,
-        partnerName,
-        partnerGender,
-        partnerDeviceId: partnerDeviceIdRef.current,
-        durationSec,
-        createdAt: Date.now(),
-        fileName,
-        blob: stereoBlob,
-      });
-
-      setRecCount((c) => c + 1);
-      setConnState('done');
-    } catch (err: any) {
-      console.error('Stop Recording Error:', err);
-      setErrorMsg(`Failed to save recording: ${err.message || String(err)}`);
-      setConnState('error');
+    // CRITICAL: Only stop fallback stream tracks. Keep LiveKit mic track active for voice call.
+    if (isLocalStreamFallbackRef.current) {
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
     }
-  }, [session, partnerName, partnerGender, sendData]);
+    localStreamRef.current = null;
+    captureRef.current = null;
+
+    const durationSec = Math.round((Date.now() - cap.startTime) / 1000);
+    const nativeSampleRate = cap.ctx.sampleRate;
+
+    const localMerged = mergeChunks(cap.localChunks);
+    const remoteMerged = cap.remoteChunks.length > 0 ? mergeChunks(cap.remoteChunks) : new Float32Array(0);
+    const stereoBlob = encodeStereoWav(localMerged, remoteMerged, nativeSampleRate);
+
+    // Calculate dynamic sequence naming and build output filenames
+    const { pairSeq, recSeq } = await getRecordingSequence(session.pairId);
+    const fileName = buildFileName(
+      session.myDeviceId,
+      session.myLanguage,
+      session.myGender,
+      session.role,
+      pairSeq,
+      recSeq,
+      session.myName,
+      session.pairId,
+      partnerDeviceIdRef.current,
+      partnerGender,
+      partnerName
+    );
+    const id = `${session.pairId}_${session.role}_${recSeq}`; // unique id for multiple recordings in same pair
+
+    await saveRecording({
+      id,
+      pairId: session.pairId,
+      deviceId: session.myDeviceId,
+      role: session.role,
+      language: session.myLanguage,
+      gender: session.myGender,
+      partnerName,
+      partnerGender,
+      partnerDeviceId: partnerDeviceIdRef.current,
+      durationSec,
+      createdAt: Date.now(),
+      fileName,
+      blob: stereoBlob,
+    });
+
+    setRecCount((c) => c + 1);
+    setConnState('done');
+
+    // Host notifies guest to stop
+    if (session.role === 'HOST') {
+      await sendData({ type: 'STOP_REC' });
+    }
+  }, [session, partnerName, partnerGender, releaseWakeLock, sendData]);
 
   // Keep callback refs updated to prevent stale closures
   useEffect(() => {
@@ -271,7 +259,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   // Load recordings in current session on load or update
   useEffect(() => {
     getAllRecordings().then((recs) => {
-      setAllRecordings(recs);
       const filtered = recs.filter((r) => r.pairId === session.pairId);
       setCurrentRecordings(filtered);
     });
@@ -413,11 +400,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
               const audioCtx = new AudioCtxClass();
               const source = audioCtx.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
               source.connect(audioCtx.destination);
-              
+
               // Handle autoplay block
               if (audioCtx.state === 'suspended') {
                 const resume = () => {
-                  audioCtx.resume().catch(() => {});
+                  audioCtx.resume().catch(() => { });
                 };
                 window.addEventListener('click', resume, { once: true });
                 window.addEventListener('touchstart', resume, { once: true });
@@ -438,7 +425,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
           if (audioCtx) {
             try {
               audioCtx.close();
-            } catch {}
+            } catch { }
             audioCtxsRef.current.delete(id);
           }
         }
@@ -487,7 +474,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       // Remove any leftover audio tags
       document.querySelectorAll('audio').forEach((el) => el.remove());
       if (playCtxRef.current) {
-        playCtxRef.current.close().catch(() => {});
+        playCtxRef.current.close().catch(() => { });
         playCtxRef.current = null;
       }
       if (localSpeechTimeoutRef.current) clearTimeout(localSpeechTimeoutRef.current);
@@ -497,11 +484,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       currentCtxs.forEach((ctx) => {
         try {
           ctx.close();
-        } catch {}
+        } catch { }
       });
       currentCtxs.clear();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─── LEAVE WARNING ────────────────────────────────────────────────────────
@@ -546,7 +533,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     };
   }, [acquireWakeLock, releaseWakeLock]);
 
-  const fmtTime = (s: number) => `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  const fmtTime = (s: number) => `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   const sigLabel = { excellent: '● Excellent', good: '● Good', poor: '● Weak', unknown: '○ --' }[mySignal];
   const sigColor = { excellent: 'text-green-600', good: 'text-blue-600', poor: 'text-yellow-600', unknown: 'text-slate-400' }[mySignal];
 
@@ -555,59 +542,39 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     sendData({ type: 'NEW_SESSION' });
   };
 
-  // ─── HANDLERS FOR DOWNLOAD, DELETE, SHARE & ZIP ─────────────────────────
+  // ─── HANDLERS FOR DOWNLOAD & DRIVE UPLOAD ─────────────────────────
   const handleDownloadWav = (rec: RecordingRecord) => {
     downloadSingleBlob(rec.blob, rec.fileName);
   };
 
-  const handleDelete = async (rec: RecordingRecord) => {
-    if (isZipping) return;
-    const ok = window.confirm('Are you sure you want to permanently delete this recording?');
-    if (!ok) return;
-    await deleteRecording(rec.id);
-    setRecCount((c) => c + 1); // trigger reload
-  };
-
-  const shareNative = async (rec: RecordingRecord) => {
+  // ─── SHARE HELPERS ───────────────────────────────────────────
+  const shareTelegram = async (rec: RecordingRecord) => {
     try {
-      if (navigator.share) {
-        const file = new File([rec.blob], rec.fileName, { type: 'audio/wav' });
-        await navigator.share({
-          files: [file],
-          title: rec.fileName,
-        });
-      } else {
-        alert('Native sharing is not supported on this browser. Please download the file manually.');
-      }
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        console.error('Share failed:', err);
-      }
+      const telegramUrl = `https://t.me/biswastechx`;
+
+      // 1. Download the WAV file locally so user can select it
+      downloadSingleBlob(rec.blob, rec.fileName);
+
+      // 2. Open Telegram directly to the default user
+      setTimeout(() => {
+        window.open(telegramUrl, '_blank');
+      }, 500);
+    } catch (err) {
+      console.error('Share failed:', err);
     }
   };
 
-  const downloadAllZip = async () => {
-    if (allRecordings.length === 0 || isZipping) return;
-    setIsZipping(true);
-    setZipProgress(0);
-
+  const shareWhatsApp = async (rec: RecordingRecord) => {
     try {
-      const zip = new JSZip();
-      allRecordings.forEach((rec) => {
-        zip.file(rec.fileName, rec.blob);
-      });
+      const whatsappUrl = `https://api.whatsapp.com/send?phone=919093847448`;
 
-      const zipBlob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
-        setZipProgress(Math.floor(metadata.percent));
-      });
+      downloadSingleBlob(rec.blob, rec.fileName);
 
-      downloadSingleBlob(zipBlob, `BiswasTech_Recordings_${Date.now()}.zip`);
+      setTimeout(() => {
+        window.open(whatsappUrl, '_blank');
+      }, 500);
     } catch (err) {
-      console.error('Failed to create ZIP:', err);
-      alert('Failed to create ZIP file.');
-    } finally {
-      setIsZipping(false);
-      setZipProgress(0);
+      console.error('Share failed:', err);
     }
   };
 
@@ -625,31 +592,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     }, 5000);
   };
 
-  const renderRecording = (rec: RecordingRecord) => (
-    <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] font-mono text-slate-350 break-all leading-relaxed flex-1 mr-3">{rec.fileName}</p>
-        <span className="text-[10px] bg-slate-850 text-slate-450 px-2 py-0.5 rounded-md font-semibold shrink-0">{rec.durationSec}s</span>
-      </div>
 
-      <div className="grid grid-cols-2 gap-2.5 w-full pt-1.5">
-        <button onClick={() => handleDownloadWav(rec)} disabled={isZipping}
-          className={`col-span-2 h-12 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-[14px] font-extrabold text-[14px] shadow-lg shadow-indigo-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 ${isZipping ? 'opacity-50' : ''}`}>
-          <span className="text-[16px]">📥</span> Download WAV
-        </button>
-
-        <button onClick={() => shareNative(rec)} disabled={isZipping}
-          className={`h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm ${isZipping ? 'opacity-50' : ''}`}>
-          <span className="text-[15px]">📤</span> Share
-        </button>
-        
-        <button onClick={() => handleDelete(rec)} disabled={isZipping}
-          className={`h-12 bg-red-500/15 hover:bg-red-500/25 text-red-500 border border-red-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm ${isZipping ? 'opacity-50' : ''}`}>
-          <span className="text-[15px]">🗑️</span> Delete
-        </button>
-      </div>
-    </div>
-  );
 
   return (
     <div className="min-h-screen flex flex-col bg-[#0f172a]">
@@ -701,7 +644,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
             </div>
             <h2 className="font-bold text-white text-[16px] mb-2">{connState === 'error' ? 'Connection Failed' : 'Disconnected'}</h2>
             <p className="text-[13px] text-slate-400 mb-5 leading-relaxed">{errorMsg}</p>
-            <button onClick={() => router.replace('/home')} 
+            <button onClick={() => router.replace('/home')}
               className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-semibold text-[14px] active:scale-95 transition-transform">
               Go Home
             </button>
@@ -772,7 +715,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                   </span>
                 </div>
                 <p className="font-mono text-5xl font-bold text-white tracking-wider mb-4">{fmtTime(recSeconds)}</p>
-                
+
                 {/* Waveform Animation */}
                 <div className="wave-bars mx-auto">
                   <div className="wave-bar" />
@@ -827,25 +770,39 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
             {/* Session Recordings List */}
             {currentRecordings.length > 0 && (
               <div className="w-full pt-4 mt-2 space-y-3.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                <h3 className="font-bold text-[14px] text-slate-450">Current Session Recordings</h3>
+                <h3 className="font-bold text-[14px] text-slate-450">Session Recordings</h3>
                 <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                  {currentRecordings.map(renderRecording)}
-                </div>
-              </div>
-            )}
+                  {currentRecordings.map((rec) => {
+                    return (
+                      <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[11px] font-mono text-slate-350 break-all leading-relaxed flex-1 mr-3">{rec.fileName}</p>
+                          <span className="text-[10px] bg-slate-850 text-slate-450 px-2 py-0.5 rounded-md font-semibold shrink-0">{rec.durationSec}s</span>
+                        </div>
 
-            {/* Previous Recordings List */}
-            {allRecordings.length > 0 && (
-              <div className="w-full pt-4 mt-4 space-y-3.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-[14px] text-slate-450">All Recordings</h3>
-                  <button onClick={downloadAllZip} disabled={isZipping}
-                    className={`px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-bold text-[11px] active:scale-95 transition-all flex items-center gap-1.5 ${isZipping ? 'opacity-50' : ''}`}>
-                    {isZipping ? `⏳ Zipping ${zipProgress}%` : '📦 Download All (ZIP)'}
-                  </button>
-                </div>
-                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
-                  {allRecordings.map(renderRecording)}
+                        {rec.uploaded && (
+                          <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2 py-0.5 rounded font-bold inline-block">✓ Uploaded to Google Drive</span>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-2.5 w-full pt-1.5">
+                          <button onClick={() => handleDownloadWav(rec)}
+                            className="col-span-2 h-12 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-[14px] font-extrabold text-[14px] shadow-lg shadow-indigo-500/25 active:scale-95 transition-all flex items-center justify-center gap-2">
+                            <span className="text-[16px]">📥</span> Download WAV
+                          </button>
+
+                          <button onClick={() => shareTelegram(rec)}
+                            className="h-12 bg-[#24A1DE]/15 hover:bg-[#24A1DE]/25 text-[#24A1DE] border border-[#24A1DE]/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
+                            <span className="text-[15px]">✈️</span> Telegram
+                          </button>
+
+                          <button onClick={() => shareWhatsApp(rec)}
+                            className="h-12 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-500 border border-emerald-500/20 rounded-[14px] font-bold text-[13px] active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm">
+                            <span className="text-[15px]">💬</span> WhatsApp
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
