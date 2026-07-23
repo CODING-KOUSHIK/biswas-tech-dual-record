@@ -4,7 +4,6 @@ import { useRouter } from 'next/navigation';
 import { loadProfile } from '@/lib/profile';
 import { getDeviceId } from '@/lib/device';
 import { getAllRecordings, deleteRecording, markRecordingAsUploaded, RecordingRecord } from '@/lib/db';
-import { downloadRecordingPair, getRecordingZipBlob } from '@/lib/zip';
 
 type Gender = 'MALE' | 'FEMALE';
 type View = 'home' | 'invite' | 'recordings';
@@ -50,8 +49,6 @@ export default function HomePage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
 
-  const [processingZipId, setProcessingZipId] = useState<string | null>(null);
-  const [zipProgress, setZipProgress] = useState<number>(0);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -102,28 +99,29 @@ export default function HomePage() {
     setRecordings(p => p.filter(r => r.id !== id)); setDeletingId(null);
   };
 
-  const handleDownloadZip = async (rec: RecordingRecord) => {
-    if (processingZipId) return;
-    setProcessingZipId(rec.id);
-    setZipProgress(0);
-    try {
-      await downloadRecordingPair(rec, (pct) => setZipProgress(pct));
-    } catch (err) {
-      console.error('Download failed:', err);
-    } finally {
-      setProcessingZipId(null);
-      setZipProgress(0);
-    }
+  const downloadSingleBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 5000);
+  };
+
+  const handleDownloadWav = (rec: RecordingRecord) => {
+    downloadSingleBlob(rec.blob, rec.fileName);
   };
 
   const handleUploadDrive = async (rec: RecordingRecord) => {
-    if (processingZipId) return;
-    setProcessingZipId(rec.id);
+    if (uploadingId) return;
     setUploadingId(rec.id);
-    setZipProgress(0);
 
     try {
-      const { blob, filename } = await getRecordingZipBlob(rec, (pct) => setZipProgress(pct));
       const scriptUrl = process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL;
       const driveUrl = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_LINK || 'https://drive.google.com';
       let uploadedSuccess = false;
@@ -137,13 +135,13 @@ export default function HomePage() {
               const res = reader.result as string;
               resolve(res.split(',')[1] || '');
             };
-            reader.readAsDataURL(blob);
+            reader.readAsDataURL(rec.blob);
           });
 
           const res = await fetch(scriptUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
+            body: JSON.stringify({ filename: rec.fileName, base64, pairId: rec.pairId }),
           });
 
           if (res.ok) {
@@ -168,13 +166,13 @@ export default function HomePage() {
               const res = reader.result as string;
               resolve(res.split(',')[1] || '');
             };
-            reader.readAsDataURL(blob);
+            reader.readAsDataURL(rec.blob);
           });
 
           const res = await fetch('/api/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
+            body: JSON.stringify({ filename: rec.fileName, base64, pairId: rec.pairId }),
           });
 
           if (res.ok) {
@@ -189,9 +187,9 @@ export default function HomePage() {
         }
       }
 
-      // 3. Fallback: download ZIP locally and open Google Drive folder
+      // 3. Fallback: download locally and open Google Drive folder
       if (!uploadedSuccess) {
-        await downloadRecordingPair(rec);
+        downloadSingleBlob(rec.blob, rec.fileName);
         window.open(driveUrl, '_blank');
       }
 
@@ -199,15 +197,13 @@ export default function HomePage() {
       const updated = await getAllRecordings();
       setRecordings(updated);
       if (uploadedSuccess) {
-        alert('✓ Recording ZIP uploaded successfully to Google Drive!');
+        alert('✓ Recording uploaded successfully to Google Drive!');
       }
     } catch (err) {
       console.error('Upload process error:', err);
       alert('Upload failed: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
-      setProcessingZipId(null);
       setUploadingId(null);
-      setZipProgress(0);
     }
   };
 
@@ -370,9 +366,8 @@ export default function HomePage() {
         ) : (
           <div className="space-y-4">
             {recordings.map((rec) => {
-              const isProcessingThis = processingZipId === rec.id;
-              const isAnyProcessing = processingZipId !== null;
               const isUploadingThis = uploadingId === rec.id;
+              const isAnyProcessing = uploadingId !== null;
 
               return (
                 <div key={rec.id} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-5 space-y-4">
@@ -390,31 +385,15 @@ export default function HomePage() {
                   </div>
                   <p className="text-[11px] text-slate-500">Partner: {rec.partnerName}</p>
 
-                  {/* Progress animation bar when processing ZIP */}
-                  {isProcessingThis && (
-                    <div className="space-y-1.5 py-1">
-                      <div className="flex justify-between text-[11px] font-semibold text-indigo-400">
-                        <span>{isUploadingThis ? 'Uploading ZIP to Drive…' : 'Zipping audio files…'}</span>
-                        <span>{zipProgress}%</span>
-                      </div>
-                      <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-white/[0.06]">
-                        <div
-                          className="bg-gradient-to-r from-indigo-500 to-purple-500 h-2 rounded-full transition-all duration-150 ease-out"
-                          style={{ width: `${zipProgress}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
                   <div className="grid grid-cols-2 gap-2 pt-2">
-                    <button onClick={() => handleDownloadZip(rec)} disabled={isAnyProcessing}
+                    <button onClick={() => handleDownloadWav(rec)} disabled={isAnyProcessing}
                       className="h-12 bg-indigo-600 hover:bg-indigo-750 disabled:opacity-50 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
-                      {isProcessingThis && !isUploadingThis ? `Zipping ${zipProgress}%` : '📥 Download ZIP'}
+                      📥 Download WAV
                     </button>
 
                     <button onClick={() => handleUploadDrive(rec)} disabled={isAnyProcessing}
                       className="h-12 bg-purple-600/20 hover:bg-purple-600/30 disabled:opacity-50 text-purple-300 border border-purple-500/30 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
-                      {isUploadingThis ? `Uploading ${zipProgress}%` : '☁️ Upload Drive'}
+                      {isUploadingThis ? 'Uploading…' : '☁️ Upload Drive'}
                     </button>
 
                     <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id || isAnyProcessing}
