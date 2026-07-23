@@ -114,7 +114,8 @@ export function buildFileName(
   role: 'HOST' | 'GUEST',
   pairSeq: number,
   recSeq: number,
-  speakerName: string
+  speakerName: string,
+  pairId?: string
 ): string {
   const langLower = language.toLowerCase();
   const roleLower = role.toLowerCase();
@@ -124,6 +125,7 @@ export function buildFileName(
   const pairPadded = String(pairSeq).padStart(3, '0');
   const recPadded = String(recSeq).padStart(3, '0');
   const nameClean = speakerName.trim().replace(/\s+/g, '_'); // preserve spaces as underscores, keep name readable
+  const meetingTag = pairId ? `_Meeting_${pairId}` : '';
 
-  return `${langLower}_${roleLower}_${devLower}_${genLower}_PAIR${pairPadded} - ${recPadded}(${nameClean}).wav`;
+  return `${langLower}_${roleLower}_${devLower}_${genLower}${meetingTag}_PAIR${pairPadded} - ${recPadded}(${nameClean}).wav`;
 }

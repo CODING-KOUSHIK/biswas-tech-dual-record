@@ -3,8 +3,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { loadProfile } from '@/lib/profile';
 import { getDeviceId } from '@/lib/device';
-import { getAllRecordings, deleteRecording, RecordingRecord } from '@/lib/db';
-import { downloadRecordingPair } from '@/lib/zip';
+import { getAllRecordings, deleteRecording, markRecordingAsUploaded, RecordingRecord } from '@/lib/db';
+import { downloadRecordingPair, getRecordingZipBlob } from '@/lib/zip';
 
 type Gender = 'MALE' | 'FEMALE';
 type View = 'home' | 'invite' | 'recordings';
@@ -20,6 +20,25 @@ function fmtDate(ts: number) {
 export default function HomePage() {
   const router = useRouter();
   const [view, setView] = useState<View>('home');
+
+  const navigateToView = (newView: View) => {
+    setView(newView);
+    window.history.pushState({ view: newView }, '', `#${newView}`);
+  };
+
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      if (e.state && e.state.view) {
+        setView(e.state.view);
+      } else {
+        setView('home');
+      }
+    };
+    // Initialize base history state
+    window.history.replaceState({ view: 'home' }, '', '#home');
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
   const [profile, setProfile] = useState<ReturnType<typeof loadProfile>>(null);
   const [deviceId, setDeviceId] = useState('');
   const [partnerGender, setPartnerGender] = useState<Gender>('FEMALE');
@@ -30,6 +49,10 @@ export default function HomePage() {
   const [loadingRecs, setLoadingRecs] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
+
+  const [processingZipId, setProcessingZipId] = useState<string | null>(null);
+  const [zipProgress, setZipProgress] = useState<number>(0);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
 
   useEffect(() => {
     const p = loadProfile();
@@ -79,6 +102,62 @@ export default function HomePage() {
     setRecordings(p => p.filter(r => r.id !== id)); setDeletingId(null);
   };
 
+  const handleDownloadZip = async (rec: RecordingRecord) => {
+    if (processingZipId) return;
+    setProcessingZipId(rec.id);
+    setZipProgress(0);
+    try {
+      await downloadRecordingPair(rec, (pct) => setZipProgress(pct));
+    } catch (err) {
+      console.error('Download failed:', err);
+    } finally {
+      setProcessingZipId(null);
+      setZipProgress(0);
+    }
+  };
+
+  const handleUploadDrive = async (rec: RecordingRecord) => {
+    if (processingZipId) return;
+    setProcessingZipId(rec.id);
+    setUploadingId(rec.id);
+    setZipProgress(0);
+
+    try {
+      const { blob, filename } = await getRecordingZipBlob(rec, (pct) => setZipProgress(pct));
+
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = reader.result as string;
+          resolve(res.split(',')[1] || '');
+        };
+        reader.readAsDataURL(blob);
+      });
+
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
+      });
+      const data = await res.json();
+
+      if (data.driveUrl) {
+        window.open(data.driveUrl, '_blank');
+      }
+
+      await markRecordingAsUploaded(rec.id);
+      const updated = await getAllRecordings();
+      setRecordings(updated);
+    } catch (err) {
+      console.error('Upload failed:', err);
+      alert('Upload failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setProcessingZipId(null);
+      setUploadingId(null);
+      setZipProgress(0);
+    }
+  };
+
 
 
   const handleReset = () => {
@@ -114,7 +193,7 @@ export default function HomePage() {
 
       <main className="flex-1 flex flex-col justify-center px-6 py-10 gap-5 max-w-lg mx-auto w-full fade-in">
         {/* Invite Partner Card */}
-        <button onClick={() => { setView('invite'); setInviteResult(null); }}
+        <button onClick={() => { navigateToView('invite'); setInviteResult(null); }}
           className="w-full rounded-2xl p-6 text-left active:scale-[0.98] transition-all flex flex-col justify-between h-36"
           style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', boxShadow: '0 8px 32px rgba(79, 70, 229, 0.25)' }}>
           <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">🔗</div>
@@ -125,7 +204,7 @@ export default function HomePage() {
         </button>
 
         {/* Previous Recordings Card */}
-        <button onClick={() => setView('recordings')}
+        <button onClick={() => navigateToView('recordings')}
           className="w-full bg-[#1e293b] border border-white/[0.06] rounded-2xl p-6 text-left active:scale-[0.98] transition-all flex flex-col justify-between h-36">
           <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-xl">🎙️</div>
           <div>
@@ -144,7 +223,7 @@ export default function HomePage() {
     <div className="min-h-screen flex flex-col bg-[#0f172a] text-white">
       <header className="bg-[#0f172a]/90 backdrop-blur-md border-b border-white/[0.06] px-5 py-4.5 sticky top-0 z-10">
         <div className="max-w-lg mx-auto flex items-center gap-3">
-          <button onClick={() => setView('home')} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-xl flex items-center justify-center text-slate-350 text-base font-bold active:scale-95 transition-transform">←</button>
+          <button onClick={() => window.history.back()} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-xl flex items-center justify-center text-slate-350 text-base font-bold active:scale-95 transition-transform">←</button>
           <h1 className="text-[18px] font-bold">Invite Partner</h1>
         </div>
       </header>
@@ -217,7 +296,7 @@ export default function HomePage() {
       <header className="bg-[#0f172a]/90 backdrop-blur-md border-b border-white/[0.06] px-5 py-4 sticky top-0 z-10">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <button onClick={() => setView('home')} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-xl flex items-center justify-center text-slate-400 text-base font-bold active:scale-95 transition-transform">←</button>
+            <button onClick={() => window.history.back()} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-xl flex items-center justify-center text-slate-400 text-base font-bold active:scale-95 transition-transform">←</button>
             <h1 className="text-[18px] font-bold">Recordings</h1>
           </div>
 
@@ -237,34 +316,62 @@ export default function HomePage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {recordings.map(rec => (
-              <div key={rec.id} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-5 space-y-4">
-                <div>
-                  <p className="font-mono text-[12px] font-semibold text-slate-200 break-all leading-relaxed">{rec.fileName}</p>
-                  <p className="text-[11px] text-slate-550 mt-1">{fmtDate(rec.createdAt)}</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{rec.role}</span>
-                  <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{rec.language}</span>
-                  <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{fmtDur(rec.durationSec)}</span>
-                  {rec.role === 'HOST' && rec.uploaded && (
-                    <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2.5 py-1 rounded-md font-bold">✓ Uploaded</span>
+            {recordings.map((rec) => {
+              const isProcessingThis = processingZipId === rec.id;
+              const isAnyProcessing = processingZipId !== null;
+              const isUploadingThis = uploadingId === rec.id;
+
+              return (
+                <div key={rec.id} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-5 space-y-4">
+                  <div>
+                    <p className="font-mono text-[12px] font-semibold text-slate-200 break-all leading-relaxed">{rec.fileName}</p>
+                    <p className="text-[11px] text-slate-550 mt-1">{fmtDate(rec.createdAt)}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{rec.role}</span>
+                    <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{rec.language}</span>
+                    <span className="text-[10px] bg-slate-800/80 text-slate-400 px-2.5 py-1 rounded-md font-semibold">{fmtDur(rec.durationSec)}</span>
+                    {rec.uploaded && (
+                      <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2.5 py-1 rounded-md font-bold">✓ Uploaded to Google Drive</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500">Partner: {rec.partnerName}</p>
+
+                  {/* Progress animation bar when processing ZIP */}
+                  {isProcessingThis && (
+                    <div className="space-y-1.5 py-1">
+                      <div className="flex justify-between text-[11px] font-semibold text-indigo-400">
+                        <span>{isUploadingThis ? 'Uploading ZIP to Drive…' : 'Zipping audio files…'}</span>
+                        <span>{zipProgress}%</span>
+                      </div>
+                      <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-white/[0.06]">
+                        <div
+                          className="bg-gradient-to-r from-indigo-500 to-purple-500 h-2 rounded-full transition-all duration-150 ease-out"
+                          style={{ width: `${zipProgress}%` }}
+                        />
+                      </div>
+                    </div>
                   )}
+
+                  <div className="grid grid-cols-2 gap-2 pt-2">
+                    <button onClick={() => handleDownloadZip(rec)} disabled={isAnyProcessing}
+                      className="h-12 bg-indigo-600 hover:bg-indigo-750 disabled:opacity-50 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
+                      {isProcessingThis && !isUploadingThis ? `Zipping ${zipProgress}%` : '📥 Download ZIP'}
+                    </button>
+
+                    <button onClick={() => handleUploadDrive(rec)} disabled={isAnyProcessing}
+                      className="h-12 bg-purple-600/20 hover:bg-purple-600/30 disabled:opacity-50 text-purple-300 border border-purple-500/30 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
+                      {isUploadingThis ? `Uploading ${zipProgress}%` : '☁️ Upload Drive'}
+                    </button>
+
+                    <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id || isAnyProcessing}
+                      className="h-12 text-red-400 bg-red-500/15 hover:bg-red-500/25 disabled:opacity-50 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center col-span-2">
+                      {deletingId === rec.id ? '…' : 'Delete'}
+                    </button>
+                  </div>
                 </div>
-                <p className="text-[11px] text-slate-500">Partner: {rec.partnerName}</p>
-                
-                <div className="grid grid-cols-2 gap-2 pt-2">
-                  <button onClick={() => downloadRecordingPair(rec)}
-                    className="h-12 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5 col-span-2">
-                    Download ZIP
-                  </button>
-                  <button onClick={() => handleDelete(rec.id)} disabled={deletingId === rec.id}
-                    className="h-12 text-red-400 bg-red-500/15 hover:bg-red-500/25 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center col-span-2">
-                    {deletingId === rec.id ? '…' : 'Delete'}
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 

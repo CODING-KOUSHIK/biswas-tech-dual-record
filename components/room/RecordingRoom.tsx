@@ -17,7 +17,7 @@ import {
   RemoteTrack,
 } from 'livekit-client';
 import { encodeWav, mergeChunks, downsampleBuffer } from '@/lib/wav';
-import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, RecordingRecord } from '@/lib/db';
+import { saveRecording, buildRecordingId, buildFileName, getRecordingSequence, getAllRecordings, markRecordingAsUploaded, RecordingRecord } from '@/lib/db';
 import { downloadRecordingPair, getRecordingZipBlob } from '@/lib/zip';
 import { useWakeLock } from '@/hooks/useWakeLock';
 
@@ -63,6 +63,8 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
   const partnerDeviceIdRef = useRef<string>('unknown');
   const isLocalStreamFallbackRef = useRef<boolean>(false);
   const playCtxRef = useRef<AudioContext | null>(null);
+  const isLeavingRef = useRef(false);
+  const audioCtxsRef = useRef<Map<string, AudioContext>>(new Map());
 
   const [connState, setConnState] = useState<ConnState>('connecting');
   const [errorMsg, setErrorMsg] = useState('');
@@ -82,6 +84,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // Saved recordings in the current session
   const [currentRecordings, setCurrentRecordings] = useState<RecordingRecord[]>([]);
+
+  // ZIP progress and uploading states
+  const [processingZipId, setProcessingZipId] = useState<string | null>(null);
+  const [zipProgress, setZipProgress] = useState<number>(0);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
 
   // ─── STALE CLOSURE PREVENTION REFS ───────────────────────────────────────
   const startRecordingRef = useRef<() => Promise<void>>(async () => {});
@@ -169,7 +176,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       setRecSeconds(0);
       timerRef.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
       setConnState('recording');
-      await acquireWakeLock();
 
       // Host notifies guest to start
       if (session.role === 'HOST') {
@@ -187,7 +193,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
     setConnState('stopping');
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    await releaseWakeLock();
 
     cap.localProc.disconnect();
     cap.remoteProc?.disconnect();
@@ -212,7 +217,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
     // Calculate dynamic sequence naming and build output filenames
     const { pairSeq, recSeq } = await getRecordingSequence(session.pairId);
-    const fileName = buildFileName(session.myDeviceId, session.myLanguage, session.myGender, session.role, pairSeq, recSeq, session.myName);
+    const fileName = buildFileName(session.myDeviceId, session.myLanguage, session.myGender, session.role, pairSeq, recSeq, session.myName, session.pairId);
     const id = `${session.pairId}_${session.role}_${recSeq}`; // unique id for multiple recordings in same pair
 
     await saveRecording({
@@ -379,13 +384,46 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
         // PLAY incoming remote audio tracks in browser speakers
         if (track.kind === Track.Kind.Audio) {
           const element = track.attach();
+          element.setAttribute('playsinline', 'true');
+          element.setAttribute('webkit-playsinline', 'true');
           document.body.appendChild(element);
           console.log('[Room] Playing remote audio track');
+
+          // Web Audio API routing to force loudspeaker output (media channel)
+          try {
+            const AudioCtxClass = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+            if (AudioCtxClass) {
+              const audioCtx = new AudioCtxClass();
+              const source = audioCtx.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
+              source.connect(audioCtx.destination);
+              
+              // Handle autoplay block
+              if (audioCtx.state === 'suspended') {
+                const resume = () => {
+                  audioCtx.resume().catch(() => {});
+                };
+                window.addEventListener('click', resume, { once: true });
+                window.addEventListener('touchstart', resume, { once: true });
+              }
+              const id = track.sid || track.mediaStreamTrack.id;
+              audioCtxsRef.current.set(id, audioCtx);
+            }
+          } catch (err) {
+            console.warn('[Room] Web Audio loudspeaker routing failed:', err);
+          }
         }
       })
       .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
         if (track.kind === Track.Kind.Audio) {
           track.detach().forEach((el: HTMLElement) => el.remove());
+          const id = track.sid || track.mediaStreamTrack.id;
+          const audioCtx = audioCtxsRef.current.get(id);
+          if (audioCtx) {
+            try {
+              audioCtx.close();
+            } catch {}
+            audioCtxsRef.current.delete(id);
+          }
         }
       })
       .on(RoomEvent.DataReceived, (payload: Uint8Array) => {
@@ -423,6 +461,7 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
         setErrorMsg(`Connection failed: ${err.message}`);
       });
 
+    const currentCtxs = audioCtxsRef.current;
     return () => {
       console.log('[Room] Unmount — disconnecting');
       room.disconnect();
@@ -434,6 +473,14 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       }
       if (localSpeechTimeoutRef.current) clearTimeout(localSpeechTimeoutRef.current);
       if (partnerSpeechTimeoutRef.current) clearTimeout(partnerSpeechTimeoutRef.current);
+
+      // Clean up Web Audio loudspeaker contexts
+      currentCtxs.forEach((ctx) => {
+        try {
+          ctx.close();
+        } catch {}
+      });
+      currentCtxs.clear();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -448,6 +495,38 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
+  // ─── PHONE BACK BUTTON INTERCEPTION ───────────────────────────────────────
+  useEffect(() => {
+    // Push extra state for back button interception
+    window.history.pushState({ noBack: true }, '');
+
+    const handlePopState = () => {
+      if (isLeavingRef.current) return;
+      const confirmLeave = window.confirm("Are you sure you want to leave the recording session?");
+      if (confirmLeave) {
+        isLeavingRef.current = true;
+        roomRef.current?.disconnect();
+        router.replace('/home');
+      } else {
+        // Restore the blocked state so back button interceptor remains active
+        window.history.pushState({ noBack: true }, '');
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [router]);
+
+  // ─── MOUNT WAKE LOCK (SCREEN ALWAYS ON) ───────────────────────────────────
+  useEffect(() => {
+    acquireWakeLock();
+    return () => {
+      releaseWakeLock();
+    };
+  }, [acquireWakeLock, releaseWakeLock]);
+
   const fmtTime = (s: number) => `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
   const sigLabel = { excellent: '● Excellent', good: '● Good', poor: '● Weak', unknown: '○ --' }[mySignal];
   const sigColor = { excellent: 'text-green-600', good: 'text-blue-600', poor: 'text-yellow-600', unknown: 'text-slate-400' }[mySignal];
@@ -457,44 +536,124 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     sendData({ type: 'NEW_SESSION' });
   };
 
+  // ─── HANDLERS FOR ZIP DOWNLOAD & DRIVE UPLOAD ─────────────────────────
+  const handleDownloadZip = async (rec: RecordingRecord) => {
+    if (processingZipId) return;
+    setProcessingZipId(rec.id);
+    setZipProgress(0);
+    try {
+      await downloadRecordingPair(rec, (pct) => setZipProgress(pct));
+    } catch (err) {
+      console.error('Download failed:', err);
+    } finally {
+      setProcessingZipId(null);
+      setZipProgress(0);
+    }
+  };
+
+  const handleUploadDrive = async (rec: RecordingRecord) => {
+    if (processingZipId) return;
+    setProcessingZipId(rec.id);
+    setUploadingId(rec.id);
+    setZipProgress(0);
+
+    try {
+      const { blob, filename } = await getRecordingZipBlob(rec, (pct) => setZipProgress(pct));
+
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = reader.result as string;
+          resolve(res.split(',')[1] || '');
+        };
+        reader.readAsDataURL(blob);
+      });
+
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, base64, pairId: rec.pairId }),
+      });
+      const data = await res.json();
+
+      if (data.driveUrl) {
+        window.open(data.driveUrl, '_blank');
+      }
+
+      await markRecordingAsUploaded(rec.id);
+      const updated = await getAllRecordings();
+      setCurrentRecordings(updated.filter((r) => r.pairId === session.pairId));
+    } catch (err) {
+      console.error('Upload failed:', err);
+      alert('Upload failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setProcessingZipId(null);
+      setUploadingId(null);
+      setZipProgress(0);
+    }
+  };
+
   // ─── WHATSAPP SHARE ZIP HELPER ───────────────────────────────────────────
   const shareFile = async (rec: RecordingRecord) => {
-    const text = `Hi, I have completed the recording for Pair ${rec.pairId}.\n\n` +
-      `File: ${rec.fileName}\n` +
-      `Duration: ${rec.durationSec}s\n` +
-      `Language: ${rec.language}\n` +
-      `Role: ${rec.role}\n` +
-      `Device ID: ${rec.deviceId}\n` +
-      `Gender: ${rec.gender}\n` +
-      `Partner: ${rec.partnerName}`;
+    if (processingZipId) return;
+    setProcessingZipId(rec.id);
+    setZipProgress(0);
 
     try {
-      const { blob, filename } = await getRecordingZipBlob(rec);
-      const file = new File([blob], filename, { type: 'application/zip' });
+      const text = `Hi, I have completed the recording for Pair ${rec.pairId}.\n\n` +
+        `File: ${rec.fileName}\n` +
+        `Duration: ${rec.durationSec}s\n` +
+        `Language: ${rec.language}\n` +
+        `Role: ${rec.role}\n` +
+        `Device ID: ${rec.deviceId}\n` +
+        `Gender: ${rec.gender}\n` +
+        `Partner: ${rec.partnerName}`;
 
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: filename,
-          text: text
-        });
-        return;
-      }
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        return;
-      }
-      console.error('Web Share failed, falling back:', err);
-    }
+      const whatsappUrl = `https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`;
 
-    // Fallback: download the file and open the WhatsApp link
-    alert("Direct file sharing is not supported by your browser. The file will be downloaded, and WhatsApp will open to share the details.");
-    try {
-      await downloadRecordingPair(rec);
-    } catch (err) {
-      console.error('Fallback download failed:', err);
+      // 1. Synchronously check if native Web Share is supported
+      const isWebShareSupported = typeof navigator.share !== 'undefined';
+
+      if (!isWebShareSupported) {
+        // Open the WhatsApp window synchronously to prevent popup blocker
+        window.open(whatsappUrl, '_blank');
+      }
+
+      // 2. Download the ZIP file in backend/background first as requested
+      try {
+        await downloadRecordingPair(rec, (pct) => setZipProgress(pct));
+      } catch (err) {
+        console.error('Download failed:', err);
+      }
+
+      // 3. Share the file in WhatsApp (using Web Share API if supported)
+      if (isWebShareSupported) {
+        try {
+          const { blob, filename } = await getRecordingZipBlob(rec);
+          const file = new File([blob], filename, { type: 'application/zip' });
+
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              files: [file],
+              title: filename,
+              text: text
+            });
+            return;
+          }
+        } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') {
+            return;
+          }
+          console.error('Web Share failed, falling back:', err);
+        }
+
+        // If Web Share API checks failed, open WhatsApp fallback
+        window.open(whatsappUrl, '_blank');
+      }
+    } finally {
+      setProcessingZipId(null);
+      setZipProgress(0);
     }
-    window.open(`https://api.whatsapp.com/send?phone=919093847448&text=${encodeURIComponent(text)}`, '_blank');
   };
 
   const downloadSingleBlob = (blob: Blob, fileName: string) => {
@@ -532,9 +691,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
           <div className="flex items-center gap-3">
             <span className={`text-[12px] font-semibold ${sigColor}`}>{sigLabel}</span>
             <button onClick={() => {
-              if (connState === 'recording' && !confirm('Recording in progress. Leave?')) return;
-              roomRef.current?.disconnect();
-              router.replace('/home');
+              if (confirm('Are you sure you want to leave the recording session?')) {
+                isLeavingRef.current = true;
+                roomRef.current?.disconnect();
+                router.replace('/home');
+              }
             }} className="text-[12px] text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-500/30 rounded-lg px-3 py-1.5 font-medium transition-colors active:scale-95">
               Leave
             </button>
@@ -690,6 +851,10 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                 <h3 className="font-bold text-[14px] text-slate-450">Session Recordings</h3>
                 <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
                   {currentRecordings.map((rec) => {
+                    const isProcessingThis = processingZipId === rec.id;
+                    const isAnyProcessing = processingZipId !== null;
+                    const isUploadingThis = uploadingId === rec.id;
+
                     return (
                       <div key={rec.id + rec.createdAt} className="bg-[#1e293b] border border-white/[0.06] rounded-2xl p-4.5 space-y-3.5">
                         <div className="flex items-center justify-between">
@@ -697,19 +862,41 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
                           <span className="text-[10px] bg-slate-850 text-slate-450 px-2 py-0.5 rounded-md font-semibold shrink-0">{rec.durationSec}s</span>
                         </div>
 
-                        {session.role === 'HOST' && rec.uploaded && (
+                        {rec.uploaded && (
                           <span className="text-[10px] bg-emerald-500/10 text-emerald-450 px-2 py-0.5 rounded font-bold inline-block">✓ Uploaded to Google Drive</span>
                         )}
 
+                        {/* Progress animation bar when processing ZIP */}
+                        {isProcessingThis && (
+                          <div className="space-y-1.5 py-1">
+                            <div className="flex justify-between text-[11px] font-semibold text-indigo-400">
+                              <span>{isUploadingThis ? 'Uploading ZIP to Drive…' : 'Zipping audio files…'}</span>
+                              <span>{zipProgress}%</span>
+                            </div>
+                            <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-white/[0.06]">
+                              <div
+                                className="bg-gradient-to-r from-indigo-500 to-purple-500 h-2 rounded-full transition-all duration-150 ease-out"
+                                style={{ width: `${zipProgress}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-2 gap-2 w-full pt-1">
-                          <button onClick={() => downloadRecordingPair(rec)}
-                            className={`h-11 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5 ${session.role !== 'HOST' ? 'col-span-2' : ''}`}>
-                            Download ZIP
+                          <button onClick={() => handleDownloadZip(rec)} disabled={isAnyProcessing}
+                            className="h-11 bg-indigo-600 hover:bg-indigo-750 disabled:opacity-50 text-white rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
+                            {isProcessingThis && !isUploadingThis ? `Zipping ${zipProgress}%` : '📥 Download ZIP'}
                           </button>
+
+                          <button onClick={() => handleUploadDrive(rec)} disabled={isAnyProcessing}
+                            className="h-11 bg-purple-600/20 hover:bg-purple-600/30 disabled:opacity-50 text-purple-300 border border-purple-500/30 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
+                            {isUploadingThis ? `Uploading ${zipProgress}%` : '☁️ Upload Drive'}
+                          </button>
+
                           {session.role === 'HOST' && (
-                            <button onClick={() => shareFile(rec)}
-                              className="h-11 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center">
-                              WhatsApp
+                            <button onClick={() => shareFile(rec)} disabled={isAnyProcessing}
+                              className="col-span-2 h-11 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-50 text-emerald-400 rounded-xl font-bold text-[13px] active:scale-95 transition-transform flex items-center justify-center gap-1.5">
+                              💬 Share WhatsApp
                             </button>
                           )}
                         </div>
