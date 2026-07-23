@@ -114,6 +114,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
     const room = roomRef.current;
     if (!room) return;
 
+    // Host notifies guest to start IMMEDIATELY before local processing
+    if (session.role === 'HOST') {
+      sendData({ type: 'START_REC' }).catch(console.error);
+    }
+
     try {
       // 1. Get mic track from LiveKit to avoid opening the mic twice (prevents clicks/"bod bod" sound)
       let localMicTrack: MediaStreamTrack | null = null;
@@ -177,11 +182,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
       setRecSeconds(0);
       timerRef.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
       setConnState('recording');
-
-      // Host notifies guest to start
-      if (session.role === 'HOST') {
-        await sendData({ type: 'START_REC' });
-      }
     } catch (err) {
       alert('Could not start recording: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -189,6 +189,11 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
   // ─── STOP RECORDING ───────────────────────────────────────────────────────
   const stopRecording = useCallback(async () => {
+    // Host notifies guest to stop IMMEDIATELY before local processing and db save
+    if (session.role === 'HOST') {
+      sendData({ type: 'STOP_REC' }).catch(console.error);
+    }
+
     const cap = captureRef.current;
     if (!cap) return;
 
@@ -249,11 +254,6 @@ export function RecordingRoom({ roomId, livekitToken, livekitUrl, session }: Pro
 
       setRecCount((c) => c + 1);
       setConnState('done');
-
-      // Host notifies guest to stop
-      if (session.role === 'HOST') {
-        await sendData({ type: 'STOP_REC' });
-      }
     } catch (err: any) {
       console.error('Stop Recording Error:', err);
       setErrorMsg(`Failed to save recording: ${err.message || String(err)}`);
